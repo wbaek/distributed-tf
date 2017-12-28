@@ -1,0 +1,6 @@
+ujson
+
+tensorflow
+tensorpack
+git+https://github.com/wbaek/dataflow.git
+
