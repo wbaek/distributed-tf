@@ -114,11 +114,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Imagenet Dataset on Kakao Example')
     parser.add_argument('--dataset', type=str, default='cifar10',
                         help='mnist|cifar10|imagenet')
-    parser.add_argument('--batchsize',    type=int, default=32)
+    parser.add_argument('--batchsize',    type=int, default=64)
     parser.add_argument('--service-code', type=str, default='',
                         help='licence key')
-    parser.add_argument('-t', '--threads', type=int, default=4)
-    parser.add_argument('-p', '--process', type=int, default=2)
+    parser.add_argument('-t', '--threads', type=int, default=5)
+    parser.add_argument('-p', '--process', type=int, default=4)
     parser.add_argument('--mode', type=str, default='train',
                         help='train or valid')
 
