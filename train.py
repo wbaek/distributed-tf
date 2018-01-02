@@ -62,7 +62,8 @@ def main(args):
             tf.placeholder(tf.int64, (args.batchsize,))
         ]
         ds, num_classes = get_datastream(args)
-        thread = dataflow.tensorflow.QueueInput(ds, placeholders, repeat_infinite=True)
+        thread = dataflow.tensorflow.QueueInput(ds, placeholders,
+                                                repeat_infinite=True, queue_size=5)
     dp_splited = [tf.split(t, num_gpus) for t in thread.tensors()]
     logging.info('build feed data queue')
 
@@ -132,5 +133,6 @@ if __name__ == '__main__':
         logging.basicConfig(level=logging.INFO, format='[%(asctime)s %(levelname)s] %(message)s', stream=sys.stderr)
     else:
         logging.basicConfig(level=logging.INFO, format='[%(asctime)s %(levelname)s] %(message)s', filename=args.log_filename)
+    logging.getLogger("requests").setLevel(logging.WARNING)
 
     main(args)
