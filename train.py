@@ -48,60 +48,61 @@ def get_datastream(args):
     return ds, num_classes
 
 def main(args):
-    # networks
     devices = device_lib.list_local_devices()
-    num_gpus = len([d for d in devices if '/gpu' in d.name])
+    num_gpus = len([d for d in devices if 'GPU' in d.device_type])
 
-    device_name = 'gpu' if num_gpus > 0 else 'cpu'
+    device_name = 'GPU' if num_gpus > 0 else 'CPU'
     device_counts = num_gpus if num_gpus > 0 else 1
- 
-    threads = []
+    logging.info({'devices':devices, 'device_name':device_name, 'device_counts':device_counts})
+
+    # feed data queue input
+    with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
+        placeholders = [
+            tf.placeholder(tf.float32, (args.batchsize, 224, 224, 3)),
+            tf.placeholder(tf.int64, (args.batchsize,))
+        ]
+        ds, num_classes = get_datastream(args)
+        thread = dataflow.tensorflow.QueueInput(ds, placeholders, repeat_infinite=True)
+    dp_splited = [tf.split(t, num_gpus) for t in thread.tensors()]
+    logging.info('build feed data queue')
+
+    hps = resnet_model.HParams(batch_size=args.batchsize//device_counts,
+                               num_classes=num_classes,
+                               num_residual_units=5,
+                               use_bottleneck=False,
+                               weight_decay_rate=0.0002,
+                               relu_leakiness=0.1)
     models = []
     for device_idx in range(device_counts):
-        with tf.device('/%s:%d'%(device_name, device_idx)),\
-             tf.name_scope('TASK%d_TOWER%d'%(0, device_idx)),\
-             tf.variable_scope(tf.get_variable_scope(), reuse=not (device_idx is 0)) as scope:
-            ds, num_classes = get_datastream(args)
+        with tf.device(tf.DeviceSpec(device_type=device_name, device_index=device_idx)), \
+             tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE) as scope:
+            xs, labels = [dp[device_idx] for dp in dp_splited]
 
-            placeholders = [
-                tf.placeholder(tf.float32, (args.batchsize, 224, 224, 3)),
-                tf.placeholder(tf.int64, (args.batchsize,))
-            ]
-            thread = dataflow.tensorflow.QueueInput(ds, placeholders, repeat_infinite=True)
-            threads.append(thread)
-
-            xs, labels = thread.tensors()
-
-            hps = resnet_model.HParams(batch_size=args.batchsize,
-                             num_classes=num_classes,
-                             min_lrn_rate=0.0001,
-                             lrn_rate=0.1,
-                             num_residual_units=5,
-                             use_bottleneck=False,
-                             weight_decay_rate=0.0002,
-                             relu_leakiness=0.1,
-                             optimizer='mom')
             model = resnet_model.ResNet(hps, xs, labels, args.mode)
             model.build_graph()
             models.append( model )
+    logging.info('build graph model')
 
-    gradients_avg = average_gradients([zip(m.gradients, m.variables) for m in models])
-    op = models[0].optimizer.apply_gradients(gradients_avg, global_step=models[0].global_step)
-    cost = tf.reduce_mean([m.cost for m in models])
-    accuracy = tf.reduce_mean([m.accuracy for m in models])
-    logging.info('build model')
+    with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
+        cost = tf.reduce_mean([m.cost for m in models])
+        accuracy = tf.reduce_mean([m.accuracy for m in models])
+        global_step = tf.train.get_or_create_global_step()
+        learning_rate = tf.train.exponential_decay(args.learning_rate, global_step,
+                                                   decay_steps=50000, decay_rate=0.8, staircase=True)
+        optimizer = tf.train.MomentumOptimizer(learning_rate, 0.9)
+        with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+            train_op = optimizer.minimize(cost, global_step, colocate_gradients_with_ops=True)
+    logging.info('build optimizer')
 
-    #with tf.train.MonitoredTrainingSession(checkpoint_dir=args.checkpoint_dir) as sess:
-    with tf.Session() as sess:
+    config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
+    with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
-        _ = [t.start() for t in threads]
-        logging.info('variable initialized')
+        thread.start()
 
-        #while not sess.should_stop()
         steps_per_epoch = ds.size() // (device_counts)
         for epoch in range(100):
             for step in range(steps_per_epoch):
-                _, c, a = sess.run([op, cost, accuracy])
+                _, c, a = sess.run([train_op, cost, accuracy])
                 logging.info('epoch:%03d step:%06d/%06d loss:%.6f accuracy:%.6f',
                     epoch, step, steps_per_epoch, c, a)
 
@@ -119,6 +120,9 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--process', type=int, default=2)
     parser.add_argument('--mode', type=str, default='train',
                         help='train or valid')
+
+    parser.add_argument('-l', '--learning-rate', type=float, default=0.01)
+
     parser.add_argument('--checkpoint-dir', type=dir, default='./checkpoints/')
     parser.add_argument('--log-filename',   type=str, default='')
     args = parser.parse_args()

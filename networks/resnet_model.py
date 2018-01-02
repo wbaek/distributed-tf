@@ -30,9 +30,9 @@ from tensorflow.python.training import moving_averages
 
 
 HParams = namedtuple('HParams',
-                     'batch_size, num_classes, min_lrn_rate, lrn_rate, '
+                     'batch_size, num_classes,'
                      'num_residual_units, use_bottleneck, weight_decay_rate, '
-                     'relu_leakiness, optimizer')
+                     'relu_leakiness')
 
 
 class ResNet(object):
@@ -56,10 +56,7 @@ class ResNet(object):
 
   def build_graph(self):
     """Build a whole graph for the model."""
-    self.global_step = tf.train.get_or_create_global_step()
     self._build_model()
-    if self.mode == 'train':
-      self._build_train_op()
     self.summaries = tf.summary.merge_all()
 
   def _stride_arr(self, stride):
@@ -132,28 +129,6 @@ class ResNet(object):
       correct_prediction5 = tf.nn.in_top_k(logits, self.labels, k=5)
       self.accuracy_top5 = tf.reduce_mean(tf.cast(correct_prediction5, tf.float32))
       
-
-  def _build_train_op(self):
-    """Build training specific ops for the graph."""
-    self.lrn_rate = tf.constant(self.hps.lrn_rate, tf.float32)
-    tf.summary.scalar('learning_rate', self.lrn_rate)
-
-    trainable_variables = tf.trainable_variables()
-    self.gradients = tf.gradients(self.cost, trainable_variables)
-    self.variables = trainable_variables
-
-    if self.hps.optimizer == 'sgd':
-      self.optimizer = tf.train.GradientDescentOptimizer(self.lrn_rate)
-    elif self.hps.optimizer == 'mom':
-      self.optimizer = tf.train.MomentumOptimizer(self.lrn_rate, 0.9)
-
-    apply_op = self.optimizer.apply_gradients(
-        zip(self.gradients, trainable_variables),
-        global_step=self.global_step, name='train_step')
-
-    train_ops = [apply_op] + self._extra_train_ops
-    self.train_op = tf.group(*train_ops)
-
   # TODO(xpan): Consider batch_norm in contrib/layers/python/layers/layers.py
   def _batch_norm(self, name, x):
     """Batch normalization."""
