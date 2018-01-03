@@ -47,14 +47,17 @@ def get_datastream(dataset, mode, batchsize, service_code=None, processes=1, thr
 
 
 def main(args):
-    logging.info(args)
-
     devices = device_lib.list_local_devices()
     num_gpus = len([d for d in devices if 'GPU' in d.device_type])
 
     device_name = 'GPU' if num_gpus > 0 else 'CPU'
-    device_counts = num_gpus if num_gpus > 0 else 1
+    device_counts = min(num_gpus if num_gpus > 0 else 1, args.num_gpus)
     logging.info({'devices': devices, 'device_name': device_name, 'device_counts': device_counts})
+
+    args.num_gpus = device_counts
+    args.batchsize *= device_counts
+    args.process *= device_counts
+    logging.info(args)
 
     # feed data queue input
     with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
@@ -76,6 +79,8 @@ def main(args):
                                use_bottleneck=False,
                                weight_decay_rate=0.0002,
                                relu_leakiness=0.1)
+
+    # build model graph
     models = []
     for device_idx in range(device_counts):
         with tf.device(tf.DeviceSpec(device_type=device_name, device_index=device_idx)), \
@@ -100,6 +105,7 @@ def main(args):
             train_op = optimizer.minimize(cost, global_step, colocate_gradients_with_ops=True)
     logging.info('build optimizer')
 
+    # session hooks
     steps_per_epoch = ds.size() // device_counts
     checkpoint_saver = tf.train.CheckpointSaverHook(
         checkpoint_dir=args.checkpoint_dir, save_steps=steps_per_epoch)
@@ -119,6 +125,7 @@ def main(args):
         'queue_size': thread.queue_size()
     }
 
+    # train loop
     config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
     with tf.train.SingularMonitoredSession(
          config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir) as sess:
@@ -136,10 +143,12 @@ def main(args):
                     'batchsize': args.batchsize,
                     'elapsed': time.time() - start_time
                 })
+                results['images_per_sec'] = results['batchsize'] / results['elapsed']
                 logging.info(
-                    'epoch:{epoch:03d} step:{step:04d}/{steps_per_epoch:04d}'
-                    'loss:{cost:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}}'
-                    'elapsed:{elapsed:.1f}sec'.format_map(results))
+                    'epoch:{epoch:03d} step:{step:04d}/{steps_per_epoch:04d} '
+                    'loss:{cost:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
+                    'elapsed:{elapsed:.1f}sec '
+                    '{images_per_sec:.3f}images/sec'.format_map(results))
 
 
 if __name__ == '__main__':
@@ -148,17 +157,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Imagenet Dataset on Kakao Example')
     parser.add_argument('--name', type=str, required=True,
                         help='project name')
+
     parser.add_argument('--dataset', type=str, default='cifar10',
                         help='mnist|cifar10|imagenet')
     parser.add_argument('--mode', type=str, default='train',
                         help='train or valid or test')
+    parser.add_argument('-n', '--num-gpus', type=int, default=8)
+    parser.add_argument('-l', '--learning-rate', type=float, default=0.05)
+
     parser.add_argument('--batchsize',    type=int, default=64)
     parser.add_argument('--service-code', type=str, default='',
                         help='licence key')
     parser.add_argument('-p', '--process', type=int, default=4)
     parser.add_argument('-t', '--threads', type=int, default=4)
-
-    parser.add_argument('-l', '--learning-rate', type=float, default=0.01)
 
     currnet_path = os.path.dirname(os.path.abspath(__file__))
     parser.add_argument('--checkpoint-dir', type=str, default=currnet_path+'/checkpoints/')
