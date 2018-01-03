@@ -124,10 +124,10 @@ class ResNet(object):
 
     with tf.variable_scope('evaluation'):
       correct_prediction1 = tf.nn.in_top_k(logits, self.labels, k=1)
-      self.accuracy = tf.reduce_mean(tf.cast(correct_prediction1, tf.float32))
+      self.accuracy = tf.reduce_mean(tf.cast(correct_prediction1, tf.float32), name='accuracy_top1')
 
       correct_prediction5 = tf.nn.in_top_k(logits, self.labels, k=5)
-      self.accuracy_top5 = tf.reduce_mean(tf.cast(correct_prediction5, tf.float32))
+      self.accuracy_top5 = tf.reduce_mean(tf.cast(correct_prediction5, tf.float32), name='accuracy_top5')
       
   # TODO(xpan): Consider batch_norm in contrib/layers/python/layers/layers.py
   def _batch_norm(self, name, x):

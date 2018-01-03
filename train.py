@@ -1,59 +1,59 @@
+import os
 import sys
-import copy
 import logging
 
-import numpy as np
 import cv2
 import tensorflow as tf
-import tensorpack as tp
 import tensorpack.dataflow as df
-from tensorpack.input_source.input_source import EnqueueThread
 import dataflow
 from tensorflow.python.client import device_lib
 
 from utils.imagenet import fbresnet_augmentor
-from utils.tensorflow import average_gradients
 from networks import resnet_model
 
-def get_datastream(args):
+
+def get_datastream(dataset, mode, batchsize, service_code=None, processes=1, threads=1):
     # data feeder
-    augmentors = fbresnet_augmentor(isTrain=(args.mode == 'train'))
-    if args.dataset == 'imagenet':
-        if len(args.service_code) < 0:
+    augmentors = fbresnet_augmentor(isTrain=(mode == 'train'))
+    if dataset == 'imagenet':
+        if len(service_code) < 0:
             raise ValueError('image is must be a set service-code')
-        ds = dataflow.dataset.ILSVRC12(args.service_code, args.mode, shuffle=True).parallel(num_threads=args.threads)
+        ds = dataflow.dataset.ILSVRC12(service_code, mode, shuffle=True).parallel(num_threads=threads)
         num_classes = 1000
-    elif args.dataset == 'mnist':
-        ds = df.dataset.Mnist(args.mode, shuffle=True)
+    elif dataset == 'mnist':
+        ds = df.dataset.Mnist(mode, shuffle=True)
         augmentors = [
             df.imgaug.MapImage(lambda x: x.reshape(28, 28, 1)),
             df.imgaug.ColorSpace(cv2.COLOR_GRAY2BGR),
             df.imgaug.Resize((256, 256))
         ] + augmentors
         num_classes = 10
-    elif args.dataset == 'cifar10':
-        ds = df.dataset.Cifar10(args.mode, shuffle=True)
+    elif dataset == 'cifar10':
+        ds = df.dataset.Cifar10(mode, shuffle=True)
         augmentors = [
             df.imgaug.Resize((256, 256))
         ] + augmentors
         num_classes = 10
     else:
-        raise ValueError('%s is not support dataset'%args.dataset)
+        raise ValueError('%s is not support dataset' % dataset)
  
     ds = df.AugmentImageComponent(ds, augmentors, copy=False)
-    ds = df.PrefetchDataZMQ(ds, nr_proc=args.process)
-    ds = df.BatchData(ds, args.batchsize, remainder=not (args.mode == 'train'))
+    ds = df.PrefetchDataZMQ(ds, nr_proc=processes)
+    ds = df.BatchData(ds, batchsize, remainder=not (mode == 'train'))
     ds.reset_state()
 
     return ds, num_classes
 
+
 def main(args):
+    logging.info(args)
+
     devices = device_lib.list_local_devices()
     num_gpus = len([d for d in devices if 'GPU' in d.device_type])
 
     device_name = 'GPU' if num_gpus > 0 else 'CPU'
     device_counts = num_gpus if num_gpus > 0 else 1
-    logging.info({'devices':devices, 'device_name':device_name, 'device_counts':device_counts})
+    logging.info({'devices': devices, 'device_name': device_name, 'device_counts': device_counts})
 
     # feed data queue input
     with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
@@ -61,11 +61,18 @@ def main(args):
             tf.placeholder(tf.float32, (args.batchsize, 224, 224, 3)),
             tf.placeholder(tf.int64, (args.batchsize,))
         ]
-        ds, num_classes = get_datastream(args)
-        thread = dataflow.tensorflow.QueueInput(ds, placeholders,
-                                                repeat_infinite=True, queue_size=5)
-    dp_splited = [tf.split(t, num_gpus) for t in thread.tensors()]
-    logging.info('build feed data queue')
+        ds, num_classes = get_datastream(
+            args.dataset, args.mode, args.batchsize,
+            args.service_code, args.process, args.threads)
+        thread = dataflow.tensorflow.QueueInput(
+            ds, placeholders, repeat_infinite=True, queue_size=5)
+    dp_splited = [tf.split(t, device_counts) for t in thread.tensors()]
+    logging.info('build feed data queue thread')
+
+    config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
+    with tf.Session(config=config):
+        thread.start()
+    logging.info('start feed data queue thread')
 
     hps = resnet_model.HParams(batch_size=args.batchsize//device_counts,
                                num_classes=num_classes,
@@ -76,63 +83,83 @@ def main(args):
     models = []
     for device_idx in range(device_counts):
         with tf.device(tf.DeviceSpec(device_type=device_name, device_index=device_idx)), \
-             tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE) as scope:
+             tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
             xs, labels = [dp[device_idx] for dp in dp_splited]
 
             model = resnet_model.ResNet(hps, xs, labels, args.mode)
             model.build_graph()
-            models.append( model )
+            models.append(model)
     logging.info('build graph model')
 
     with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
-        cost = tf.reduce_mean([m.cost for m in models])
-        accuracy = tf.reduce_mean([m.accuracy for m in models])
+        cost = tf.reduce_mean([m.cost for m in models], name='cost')
+        accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
+        accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
         global_step = tf.train.get_or_create_global_step()
-        learning_rate = tf.train.exponential_decay(args.learning_rate, global_step,
-                                                   decay_steps=50000, decay_rate=0.8, staircase=True)
+        learning_rate = tf.train.exponential_decay(
+            args.learning_rate, global_step,
+            decay_steps=50000, decay_rate=0.8, staircase=True, name='learning_rate')
         optimizer = tf.train.MomentumOptimizer(learning_rate, 0.9)
         with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
             train_op = optimizer.minimize(cost, global_step, colocate_gradients_with_ops=True)
     logging.info('build optimizer')
 
-    config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
-    with tf.Session(config=config) as sess:
-        sess.run(tf.global_variables_initializer())
-        thread.start()
-
-        steps_per_epoch = ds.size() // (device_counts)
+    steps_per_epoch = ds.size() // device_counts
+    checkpoint_saver = tf.train.CheckpointSaverHook(
+        checkpoint_dir=args.checkpoint_dir, save_steps=steps_per_epoch)
+    summary_saver = tf.train.SummarySaverHook(
+        summary_op=tf.summary.merge_all(),
+        output_dir=args.summary_dir, save_steps=steps_per_epoch//10)
+    tensor_logger = tf.train.LoggingTensorHook({
+        'step': global_step.name,
+        'cost': 'cost',
+        'learning_rate': 'learning_rate',
+        'feed_queue_size': thread.queue_size().name,
+        'accuracy_top1': 'accuracy',
+        'accuracy_top5': 'accuracy_top5'
+    }, every_n_iter=1)
+    hooks = [checkpoint_saver, summary_saver, tensor_logger]
+    with tf.train.SingularMonitoredSession(
+            config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir) as sess:
         for epoch in range(100):
             for step in range(steps_per_epoch):
+                logging.info('epoch:%03d step:%06d/%06d', epoch, step, steps_per_epoch)
                 _, c, a = sess.run([train_op, cost, accuracy])
                 logging.info('epoch:%03d step:%06d/%06d loss:%.6f accuracy:%.6f',
-                    epoch, step, steps_per_epoch, c, a)
+                             epoch, step, steps_per_epoch, c, a)
 
-    
+
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Imagenet Dataset on Kakao Example')
+    parser.add_argument('--name', type=str, required=True,
+                        help='project name')
     parser.add_argument('--dataset', type=str, default='cifar10',
                         help='mnist|cifar10|imagenet')
+    parser.add_argument('--mode', type=str, default='train',
+                        help='train or valid or test')
     parser.add_argument('--batchsize',    type=int, default=64)
     parser.add_argument('--service-code', type=str, default='',
                         help='licence key')
-    parser.add_argument('-t', '--threads', type=int, default=5)
     parser.add_argument('-p', '--process', type=int, default=4)
-    parser.add_argument('--mode', type=str, default='train',
-                        help='train or valid')
+    parser.add_argument('-t', '--threads', type=int, default=4)
 
     parser.add_argument('-l', '--learning-rate', type=float, default=0.01)
 
-    parser.add_argument('--checkpoint-dir', type=dir, default='./checkpoints/')
+    currnet_path = os.path.dirname(os.path.abspath(__file__))
+    parser.add_argument('--checkpoint-dir', type=str, default=currnet_path+'/checkpoints/')
+    parser.add_argument('--summary-dir', type=str, default=currnet_path+'/summaries/')
     parser.add_argument('--log-filename',   type=str, default='')
     args = parser.parse_args()
-    logging.getLogger("requests").setLevel(logging.INFO)
+    args.checkpoint_dir += args.name + '/'
+    args.summary_dir += args.name + '/'
 
+    log_format = '[%(asctime)s %(levelname)s] %(message)s'
     if not args.log_filename:
-        logging.basicConfig(level=logging.INFO, format='[%(asctime)s %(levelname)s] %(message)s', stream=sys.stderr)
+        logging.basicConfig(level=logging.INFO, format=log_format, stream=sys.stderr)
     else:
-        logging.basicConfig(level=logging.INFO, format='[%(asctime)s %(levelname)s] %(message)s', filename=args.log_filename)
+        logging.basicConfig(level=logging.INFO, format=log_format, filename=args.log_filename)
     logging.getLogger("requests").setLevel(logging.WARNING)
 
     main(args)
