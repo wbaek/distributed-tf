@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import logging
 
 import cv2
@@ -69,11 +70,6 @@ def main(args):
     dp_splited = [tf.split(t, device_counts) for t in thread.tensors()]
     logging.info('build feed data queue thread')
 
-    config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
-    with tf.Session(config=config):
-        thread.start()
-    logging.info('start feed data queue thread')
-
     hps = resnet_model.HParams(batch_size=args.batchsize//device_counts,
                                num_classes=num_classes,
                                num_residual_units=5,
@@ -110,23 +106,37 @@ def main(args):
     summary_saver = tf.train.SummarySaverHook(
         summary_op=tf.summary.merge_all(),
         output_dir=args.summary_dir, save_steps=steps_per_epoch//10)
-    tensor_logger = tf.train.LoggingTensorHook({
-        'step': global_step.name,
-        'cost': 'cost',
-        'learning_rate': 'learning_rate',
-        'feed_queue_size': thread.queue_size().name,
-        'accuracy_top1': 'accuracy',
-        'accuracy_top5': 'accuracy_top5'
-    }, every_n_iter=1)
-    hooks = [checkpoint_saver, summary_saver, tensor_logger]
+    hooks = [checkpoint_saver, summary_saver]
+    logging.info('build hooks')
+
+    fetches = {
+        'ops':[train_op],
+        'global_step':global_step,
+        'cost':cost,
+        'accuracy':accuracy,
+        'accuracy_top5':accuracy_top5,
+        'learning_rate':learning_rate,
+        'queue_size':thread.queue_size()
+    }
+
+    config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
     with tf.train.SingularMonitoredSession(
-            config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir) as sess:
+         config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir) as sess:
+        thread.start(sess)
+        logging.info('start feed data queue thread')
+
         for epoch in range(100):
             for step in range(steps_per_epoch):
-                logging.info('epoch:%03d step:%06d/%06d', epoch, step, steps_per_epoch)
-                _, c, a = sess.run([train_op, cost, accuracy])
-                logging.info('epoch:%03d step:%06d/%06d loss:%.6f accuracy:%.6f',
-                             epoch, step, steps_per_epoch, c, a)
+                start_time = time.time()
+                results = sess.run(fetches)
+                results.update({
+                    'epoch':epoch,
+                    'step':step,
+                    'steps_per_epoch':steps_per_epoch,
+                    'batchsize':args.batchsize,
+                    'elapsed':time.time() - start_time
+                })
+                logging.info('epoch:{epoch:03d} step:{step:04d}/{steps_per_epoch:04d} loss:{cost:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} elapsed:{elapsed:.1f}sec'.format_map(results))
 
 
 if __name__ == '__main__':
