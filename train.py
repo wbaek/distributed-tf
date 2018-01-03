@@ -110,13 +110,13 @@ def main(args):
     logging.info('build hooks')
 
     fetches = {
-        'ops':[train_op],
-        'global_step':global_step,
-        'cost':cost,
-        'accuracy':accuracy,
-        'accuracy_top5':accuracy_top5,
-        'learning_rate':learning_rate,
-        'queue_size':thread.queue_size()
+        'ops': [train_op],
+        'global_step': global_step,
+        'cost': cost,
+        'accuracy': accuracy,
+        'accuracy_top5': accuracy_top5,
+        'learning_rate': learning_rate,
+        'queue_size': thread.queue_size()
     }
 
     config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
@@ -130,13 +130,16 @@ def main(args):
                 start_time = time.time()
                 results = sess.run(fetches)
                 results.update({
-                    'epoch':epoch,
-                    'step':step,
-                    'steps_per_epoch':steps_per_epoch,
-                    'batchsize':args.batchsize,
-                    'elapsed':time.time() - start_time
+                    'epoch': epoch,
+                    'step': step,
+                    'steps_per_epoch': steps_per_epoch,
+                    'batchsize': args.batchsize,
+                    'elapsed': time.time() - start_time
                 })
-                logging.info('epoch:{epoch:03d} step:{step:04d}/{steps_per_epoch:04d} loss:{cost:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} elapsed:{elapsed:.1f}sec'.format_map(results))
+                logging.info(
+                    'epoch:{epoch:03d} step:{step:04d}/{steps_per_epoch:04d}'
+                    'loss:{cost:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}}'
+                    'elapsed:{elapsed:.1f}sec'.format_map(results))
 
 
 if __name__ == '__main__':
