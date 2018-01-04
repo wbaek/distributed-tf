@@ -146,7 +146,7 @@ def main(args):
                     'learning-rate:{learning_rate:.3f} '
                     'loss:{loss:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
                     'elapsed:{elapsed:.1f}sec '
-                    '({images_per_sec:.3f}images/sec queue:{queue_size}'.format_map(results))
+                    '({images_per_sec:.3f}images/sec queue:{queue_size})'.format_map(results))
 
 
 if __name__ == '__main__':
