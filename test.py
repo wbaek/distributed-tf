@@ -47,14 +47,14 @@ def get_datastream(dataset, mode, batchsize, service_code=None, processes=1, thr
 
 
 def main(args):
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in range(args.num_gpus)])
     devices = device_lib.list_local_devices()
     num_gpus = len([d for d in devices if 'GPU' in d.device_type])
 
     device_name = 'GPU' if num_gpus > 0 else 'CPU'
-    device_counts = min(num_gpus if num_gpus > 0 else 1, args.num_gpus)
+    device_counts = max(min(num_gpus if num_gpus > 0 else 1, args.num_gpus), 1)
     logging.info({'devices': devices, 'device_name': device_name, 'device_counts': device_counts})
 
-    args.num_gpus = device_counts
     args.batchsize *= device_counts
     args.process *= device_counts
     logging.info(args)
@@ -90,94 +90,63 @@ def main(args):
             model = resnet_model.ResNet(hps, xs, labels, args.mode)
             model.build_graph()
             models.append(model)
-    logging.info('build graph model')
-
     with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
         cost = tf.reduce_mean([m.cost for m in models], name='cost')
         accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
-        global_step = tf.train.get_or_create_global_step()
-        learning_rate = tf.train.exponential_decay(
-            args.learning_rate, global_step,
-            decay_steps=50000, decay_rate=0.8, staircase=True, name='learning_rate')
-        optimizer = tf.train.MomentumOptimizer(learning_rate, 0.9)
-        with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-            train_op = optimizer.minimize(cost, global_step, colocate_gradients_with_ops=True)
-    logging.info('build optimizer')
+    logging.info('build graph model')
 
     # session hooks
     steps_per_epoch = ds.size()
-    checkpoint_saver = tf.train.CheckpointSaverHook(
-        checkpoint_dir=args.checkpoint_dir, save_steps=steps_per_epoch//2)
-    summary_saver = tf.train.SummarySaverHook(
-        summary_op=tf.summary.merge_all(),
-        output_dir=args.summary_dir, save_steps=steps_per_epoch//30)
-    hooks = [checkpoint_saver, summary_saver]
-    logging.info('build hooks')
-
     fetches = {
-        'ops': [train_op],
-        'global_step': global_step,
         'cost': cost,
         'accuracy': accuracy,
         'accuracy_top5': accuracy_top5,
-        'learning_rate': learning_rate,
-        'queue_size': thread.queue_size()
     }
 
     # train loop
     config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
     with tf.train.SingularMonitoredSession(
-         config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir) as sess:
+         config=config, checkpoint_dir=args.checkpoint_dir) as sess:
         thread.start(sess)
         logging.info('start feed data queue thread')
 
-        for epoch in range(100):
-            for step in range(steps_per_epoch):
-                start_time = time.time()
-                results = sess.run(fetches)
-                results.update({
-                    'epoch': epoch,
-                    'step': step,
-                    'steps_per_epoch': steps_per_epoch,
-                    'batchsize': args.batchsize,
-                    'elapsed': time.time() - start_time
-                })
-                results['images_per_sec'] = results['batchsize'] / results['elapsed']
-                logging.info(
-                    'epoch:{epoch:03d} step:{step:04d}/{steps_per_epoch:04d} '
-                    'loss:{cost:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
-                    'elapsed:{elapsed:.1f}sec '
-                    '{images_per_sec:.3f}images/sec'.format_map(results))
+        for step in range(steps_per_epoch):
+            start_time = time.time()
+            results = sess.run(fetches)
+            results.update({
+                'step': step,
+                'steps_per_epoch': steps_per_epoch,
+                'batchsize': args.batchsize,
+                'elapsed': time.time() - start_time
+            })
+            results['images_per_sec'] = results['batchsize'] / results['elapsed']
+            logging.info(
+                'step:{step:04d}/{steps_per_epoch:04d} '
+                'loss:{cost:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
+                'elapsed:{elapsed:.1f}sec '
+                '{images_per_sec:.3f}images/sec'.format_map(results))
 
 
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Imagenet Dataset on Kakao Example')
-    parser.add_argument('--name', type=str, required=True,
-                        help='project name')
-
     parser.add_argument('--dataset', type=str, default='imagenet',
                         help='mnist|cifar10|imagenet')
-    parser.add_argument('--mode', type=str, default='train',
+    parser.add_argument('--mode', type=str, default='valid',
                         help='train or valid or test')
-    parser.add_argument('-n', '--num-gpus', type=int, default=8)
-    parser.add_argument('-l', '--learning-rate', type=float, default=0.05)
+    parser.add_argument('-n', '--num-gpus', type=int, default=0)
 
-    parser.add_argument('--batchsize',    type=int, default=64)
+    parser.add_argument('--batchsize',    type=int, default=256)
     parser.add_argument('--service-code', type=str, default='',
                         help='licence key')
-    parser.add_argument('-p', '--process', type=int, default=4)
+    parser.add_argument('-p', '--process', type=int, default=8)
     parser.add_argument('-t', '--threads', type=int, default=4)
 
-    currnet_path = os.path.dirname(os.path.abspath(__file__))
-    parser.add_argument('--checkpoint-dir', type=str, default=currnet_path+'/checkpoints/')
-    parser.add_argument('--summary-dir', type=str, default=currnet_path+'/summaries/')
+    parser.add_argument('--checkpoint-dir', type=str, required=True)
     parser.add_argument('--log-filename',   type=str, default='')
     args = parser.parse_args()
-    args.checkpoint_dir += args.name + '/'
-    args.summary_dir += args.name + '/'
 
     log_format = '[%(asctime)s %(levelname)s] %(message)s'
     if not args.log_filename:

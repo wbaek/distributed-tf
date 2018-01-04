@@ -102,3 +102,7 @@ ENV/
 
 .idea
 *.swp
+
+checkpoints
+summaries
+logs
