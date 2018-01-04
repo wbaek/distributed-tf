@@ -162,7 +162,7 @@ if __name__ == '__main__':
                         help='train or valid or test')
     parser.add_argument('-n', '--num-gpus', type=int, default=8)
 
-    parser.add_argument('--batchsize',    type=int, default=256)
+    parser.add_argument('--batchsize',    type=int, default=128)
     parser.add_argument('--service-code', type=str, default='',
                         help='licence key')
     parser.add_argument('-p', '--process', type=int, default=4)
