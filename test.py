@@ -73,13 +73,6 @@ def main(args):
     dp_splited = [tf.split(t, device_counts) for t in thread.tensors()]
     logging.info('build feed data queue thread')
 
-    hps = resnet_model.HParams(batch_size=args.batchsize//device_counts,
-                               num_classes=num_classes,
-                               num_residual_units=5,
-                               use_bottleneck=False,
-                               weight_decay_rate=0.0002,
-                               relu_leakiness=0.1)
-
     # build model graph
     models = []
     for device_idx in range(device_counts):
@@ -87,11 +80,11 @@ def main(args):
              tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
             xs, labels = [dp[device_idx] for dp in dp_splited]
 
-            model = resnet_model.ResNet(hps, xs, labels, args.mode)
+            model = resnet_model.ResNet(50, num_classes, xs, labels, (args.mode == 'train'))
             model.build_graph()
             models.append(model)
     with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
-        cost = tf.reduce_mean([m.cost for m in models], name='cost')
+        loss = tf.reduce_mean([m.loss for m in models], name='loss')
         accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
     logging.info('build graph model')
@@ -99,7 +92,7 @@ def main(args):
     # session hooks
     steps_per_epoch = ds.size()
     fetches = {
-        'cost': cost,
+        'loss': loss,
         'accuracy': accuracy,
         'accuracy_top5': accuracy_top5,
     }
@@ -123,7 +116,7 @@ def main(args):
             results['images_per_sec'] = results['batchsize'] / results['elapsed']
             logging.info(
                 'step:{step:04d}/{steps_per_epoch:04d} '
-                'loss:{cost:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
+                'loss:{loss:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
                 'elapsed:{elapsed:.1f}sec '
                 '{images_per_sec:.3f}images/sec'.format_map(results))
 

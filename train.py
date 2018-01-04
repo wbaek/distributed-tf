@@ -47,6 +47,7 @@ def get_datastream(dataset, mode, batchsize, service_code=None, processes=1, thr
 
 
 def main(args):
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in range(args.num_gpus)])
     devices = device_lib.list_local_devices()
     num_gpus = len([d for d in devices if 'GPU' in d.device_type])
 
@@ -71,14 +72,8 @@ def main(args):
         thread = dataflow.tensorflow.QueueInput(
             ds, placeholders, repeat_infinite=True, queue_size=5)
     dp_splited = [tf.split(t, device_counts) for t in thread.tensors()]
+    steps_per_epoch = ds.size()
     logging.info('build feed data queue thread')
-
-    hps = resnet_model.HParams(batch_size=args.batchsize//device_counts,
-                               num_classes=num_classes,
-                               num_residual_units=5,
-                               use_bottleneck=False,
-                               weight_decay_rate=0.0002,
-                               relu_leakiness=0.1)
 
     # build model graph
     models = []
@@ -87,38 +82,40 @@ def main(args):
              tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
             xs, labels = [dp[device_idx] for dp in dp_splited]
 
-            model = resnet_model.ResNet(hps, xs, labels, args.mode)
+            model = resnet_model.ResNet(50, num_classes, xs, labels, (args.mode == 'train'))
             model.build_graph()
             models.append(model)
     logging.info('build graph model')
 
     with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
-        cost = tf.reduce_mean([m.cost for m in models], name='cost')
+        loss = tf.reduce_mean([m.loss for m in models], name='loss')
         accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
         global_step = tf.train.get_or_create_global_step()
-        learning_rate = tf.train.exponential_decay(
-            args.learning_rate, global_step,
-            decay_steps=50000, decay_rate=0.8, staircase=True, name='learning_rate')
-        optimizer = tf.train.MomentumOptimizer(learning_rate, 0.9)
+
+        initial_learning_rate = 0.1 * args.batchsize / 256
+        boundaries = [int(steps_per_epoch * epoch) for epoch in [30, 60, 80, 90]]
+        values = [initial_learning_rate * decay for decay in [1, 0.1, 0.01, 1e-3, 1e-4]]
+        learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32), boundaries, values)
+        optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
         with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-            train_op = optimizer.minimize(cost, global_step, colocate_gradients_with_ops=True)
+            train_op = optimizer.minimize(loss, global_step, colocate_gradients_with_ops=True)
     logging.info('build optimizer')
 
     # session hooks
-    steps_per_epoch = ds.size()
     checkpoint_saver = tf.train.CheckpointSaverHook(
-        checkpoint_dir=args.checkpoint_dir, save_steps=steps_per_epoch//2)
+        saver = tf.train.Saver(max_to_keep=100),
+        checkpoint_dir = args.checkpoint_dir, save_steps=steps_per_epoch // 2)
     summary_saver = tf.train.SummarySaverHook(
-        summary_op=tf.summary.merge_all(),
-        output_dir=args.summary_dir, save_steps=steps_per_epoch//30)
+        summary_op = tf.summary.merge_all(),
+        output_dir = args.summary_dir, save_steps=steps_per_epoch // 30)
     hooks = [checkpoint_saver, summary_saver]
     logging.info('build hooks')
 
     fetches = {
         'ops': [train_op],
         'global_step': global_step,
-        'cost': cost,
+        'loss': loss,
         'accuracy': accuracy,
         'accuracy_top5': accuracy_top5,
         'learning_rate': learning_rate,
@@ -146,9 +143,10 @@ def main(args):
                 results['images_per_sec'] = results['batchsize'] / results['elapsed']
                 logging.info(
                     'epoch:{epoch:03d} step:{step:04d}/{steps_per_epoch:04d} '
-                    'loss:{cost:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
+                    'learning-rate:{learning_rate:.3f} '
+                    'loss:{loss:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
                     'elapsed:{elapsed:.1f}sec '
-                    '{images_per_sec:.3f}images/sec'.format_map(results))
+                    '({images_per_sec:.3f}images/sec queue:{queue_size}'.format_map(results))
 
 
 if __name__ == '__main__':
@@ -163,13 +161,12 @@ if __name__ == '__main__':
     parser.add_argument('--mode', type=str, default='train',
                         help='train or valid or test')
     parser.add_argument('-n', '--num-gpus', type=int, default=8)
-    parser.add_argument('-l', '--learning-rate', type=float, default=0.05)
 
-    parser.add_argument('--batchsize',    type=int, default=64)
+    parser.add_argument('--batchsize',    type=int, default=256)
     parser.add_argument('--service-code', type=str, default='',
                         help='licence key')
     parser.add_argument('-p', '--process', type=int, default=4)
-    parser.add_argument('-t', '--threads', type=int, default=4)
+    parser.add_argument('-t', '--threads', type=int, default=8)
 
     currnet_path = os.path.dirname(os.path.abspath(__file__))
     parser.add_argument('--checkpoint-dir', type=str, default=currnet_path+'/checkpoints/')
