@@ -44,6 +44,7 @@ def main(args):
     ds.reset_state()
     num_classes = dataset_meta['num_classes'][args.dataset]
     num_images = dataset_meta['num_images'][args.dataset]
+    steps_per_epoch = num_images // args.batchsize
     logging.info('build remote feed data (tcp://0.0.0.0:%s)'%str(args.port))
 
     # feed data queue input
@@ -54,8 +55,7 @@ def main(args):
         ]
         thread = dataflow.tensorflow.QueueInput(
             ds, placeholders, repeat_infinite=True, queue_size=5)
-    dp_splited = [tf.split(t, device_counts) for t in thread.tensors()]
-    steps_per_epoch = num_images // args.batchsize
+        dp_splited = [tf.split(t, device_counts) for t in thread.tensors()]
     logging.info('build feed data queue thread')
 
     # build model graph
@@ -76,7 +76,7 @@ def main(args):
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
         global_step = tf.train.get_or_create_global_step()
 
-        initial_learning_rate = 0.1 * args.batchsize / 256
+        initial_learning_rate = args.learning_rate * args.batchsize / 256
         boundaries = [int(steps_per_epoch * epoch) for epoch in [30, 60, 80, 90]]
         values = [initial_learning_rate * decay for decay in [1, 0.1, 0.01, 1e-3, 1e-4]]
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32), boundaries, values)
@@ -85,14 +85,14 @@ def main(args):
             train_op = optimizer.minimize(loss, global_step, colocate_gradients_with_ops=True)
     logging.info('build optimizer')
 
-    # session hooks
-    checkpoint_saver = tf.train.CheckpointSaverHook(
-        saver = tf.train.Saver(max_to_keep=100),
-        checkpoint_dir = args.checkpoint_dir, save_steps=steps_per_epoch // 2)
-    summary_saver = tf.train.SummarySaverHook(
-        summary_op = tf.summary.merge_all(),
-        output_dir = args.summary_dir, save_steps=steps_per_epoch // 30)
-    hooks = [checkpoint_saver, summary_saver]
+    with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
+        checkpoint_saver = tf.train.CheckpointSaverHook(
+            saver = tf.train.Saver(max_to_keep=100),
+            checkpoint_dir = args.checkpoint_dir, save_steps=steps_per_epoch // 2)
+        summary_saver = tf.train.SummarySaverHook(
+            summary_op = tf.summary.merge_all(),
+            output_dir = args.summary_dir, save_steps=steps_per_epoch // 30)
+        hooks = [checkpoint_saver, summary_saver]
     logging.info('build hooks')
 
     fetches = {
@@ -134,7 +134,6 @@ def main(args):
 
 if __name__ == '__main__':
     import argparse
-
     parser = argparse.ArgumentParser(description='Imagenet Dataset on Kakao Example')
     parser.add_argument('--name', type=str, required=True,
                         help='project name')
@@ -146,6 +145,9 @@ if __name__ == '__main__':
     parser.add_argument('--batchsize',    type=int, default=128)
     parser.add_argument('--port',         type=int, required=True,
                         help='must be a set remote mode feeder')
+
+    parser.add_argument('--learning-rate', type=float, default=0.1,
+                        help='learning rate based on batchsize=256 (default=0.1)')
 
     currnet_path = os.path.dirname(os.path.abspath(__file__))
     parser.add_argument('--checkpoint-dir', type=str, default=currnet_path+'/checkpoints/')
@@ -163,3 +165,4 @@ if __name__ == '__main__':
     logging.getLogger("requests").setLevel(logging.WARNING)
 
     main(args)
+
