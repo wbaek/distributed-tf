@@ -8,7 +8,7 @@ import numpy as np
 import multiprocessing
 from abc import abstractmethod
 
-from tensorpack import imgaug, dataset, ModelDesc, InputDesc
+from tensorpack import imgaug, dataset
 from tensorpack.dataflow import (
     AugmentImageComponent, PrefetchDataZMQ,
     BatchData, MultiThreadMapData)

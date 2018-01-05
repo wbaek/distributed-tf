@@ -7,44 +7,11 @@ import cv2
 import tensorflow as tf
 import tensorpack.dataflow as df
 import dataflow
+import dataflow.tensorflow
 from tensorflow.python.client import device_lib
 
 from utils.imagenet import fbresnet_augmentor
 from networks import resnet_model
-
-
-def get_datastream(dataset, mode, batchsize, service_code=None, processes=1, threads=1):
-    # data feeder
-    augmentors = fbresnet_augmentor(isTrain=(mode == 'train'))
-    if dataset == 'imagenet':
-        if len(service_code) < 0:
-            raise ValueError('image is must be a set service-code')
-        ds = dataflow.dataset.ILSVRC12(service_code, mode, shuffle=True).parallel(num_threads=threads)
-        num_classes = 1000
-    elif dataset == 'mnist':
-        ds = df.dataset.Mnist(mode, shuffle=True)
-        augmentors = [
-            df.imgaug.MapImage(lambda x: x.reshape(28, 28, 1)),
-            df.imgaug.ColorSpace(cv2.COLOR_GRAY2BGR),
-            df.imgaug.Resize((256, 256))
-        ] + augmentors
-        num_classes = 10
-    elif dataset == 'cifar10':
-        ds = df.dataset.Cifar10(mode, shuffle=True)
-        augmentors = [
-            df.imgaug.Resize((256, 256))
-        ] + augmentors
-        num_classes = 10
-    else:
-        raise ValueError('%s is not support dataset' % dataset)
- 
-    ds = df.AugmentImageComponent(ds, augmentors, copy=False)
-    ds = df.PrefetchDataZMQ(ds, nr_proc=processes)
-    ds = df.BatchData(ds, batchsize, remainder=not (mode == 'train'))
-    ds.reset_state()
-
-    return ds, num_classes
-
 
 def main(args):
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in range(args.num_gpus)])
@@ -57,8 +24,27 @@ def main(args):
 
     args.num_gpus = device_counts
     args.batchsize *= device_counts
-    args.process *= device_counts
     logging.info(args)
+
+    dataset_meta = {
+        'num_classes':{
+            'imagenet': 1000,
+            'cifar10': 10,
+            'mnist': 10,
+        },
+        'num_images':{
+            'imagenet': 1281167,
+            'cifar10': 50000,
+            'mnist': 60000,
+        }
+    }
+    ds = df.RemoteDataZMQ('tcp://0.0.0.0:' + str(args.port))
+    ds = df.BatchData(ds, args.batchsize, remainder=False)
+    #ds = df.PrefetchDataZMQ(ds, nr_proc=1)
+    ds.reset_state()
+    num_classes = dataset_meta['num_classes'][args.dataset]
+    num_images = dataset_meta['num_images'][args.dataset]
+    logging.info('build remote feed data (tcp://0.0.0.0:%s)'%str(args.port))
 
     # feed data queue input
     with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
@@ -66,13 +52,10 @@ def main(args):
             tf.placeholder(tf.float32, (args.batchsize, 224, 224, 3)),
             tf.placeholder(tf.int64, (args.batchsize,))
         ]
-        ds, num_classes = get_datastream(
-            args.dataset, args.mode, args.batchsize,
-            args.service_code, args.process, args.threads)
         thread = dataflow.tensorflow.QueueInput(
             ds, placeholders, repeat_infinite=True, queue_size=5)
     dp_splited = [tf.split(t, device_counts) for t in thread.tensors()]
-    steps_per_epoch = ds.size()
+    steps_per_epoch = num_images // args.batchsize
     logging.info('build feed data queue thread')
 
     # build model graph
@@ -82,7 +65,7 @@ def main(args):
              tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
             xs, labels = [dp[device_idx] for dp in dp_splited]
 
-            model = resnet_model.ResNet(50, num_classes, xs, labels, (args.mode == 'train'))
+            model = resnet_model.ResNet(50, num_classes, xs, labels, is_training=True)
             model.build_graph()
             models.append(model)
     logging.info('build graph model')
@@ -158,15 +141,11 @@ if __name__ == '__main__':
 
     parser.add_argument('--dataset', type=str, default='imagenet',
                         help='mnist|cifar10|imagenet')
-    parser.add_argument('--mode', type=str, default='train',
-                        help='train or valid or test')
     parser.add_argument('-n', '--num-gpus', type=int, default=8)
 
     parser.add_argument('--batchsize',    type=int, default=128)
-    parser.add_argument('--service-code', type=str, default='',
-                        help='licence key')
-    parser.add_argument('-p', '--process', type=int, default=4)
-    parser.add_argument('-t', '--threads', type=int, default=8)
+    parser.add_argument('--port',         type=int, required=True,
+                        help='must be a set remote mode feeder')
 
     currnet_path = os.path.dirname(os.path.abspath(__file__))
     parser.add_argument('--checkpoint-dir', type=str, default=currnet_path+'/checkpoints/')

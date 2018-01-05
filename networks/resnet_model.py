@@ -371,7 +371,7 @@ class ResNet(object):
     self._images = images
     self._labels = labels
     self._is_training = is_training
-    self.network = imagenet_resnet_v2(size, num_classes)
+    self.network = imagenet_resnet_v2(size, num_classes, 'channels_last')
 
   def build_graph(self, WEIGHT_DECAY=1e-4):
     with tf.variable_scope('logit'):
