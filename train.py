@@ -12,6 +12,7 @@ from tensorflow.python.client import device_lib
 from tensorflow.python.client import timeline
 
 from utils.imagenet import fbresnet_augmentor
+from utils.utils import average_gradients
 from networks import resnet_model
 
 
@@ -25,7 +26,7 @@ def main(args):
     logging.info({'devices': devices, 'device_name': device_name, 'device_counts': device_counts})
 
     args.num_gpus = device_counts
-    args.batchsize *= device_counts
+    #args.batchsize *= device_counts
     args.process *- device_counts
     logging.info(args)
 
@@ -43,22 +44,25 @@ def main(args):
     }
     ds = df.RemoteDataZMQ('tcp://0.0.0.0:' + str(args.port))
     ds = df.BatchData(ds, args.batchsize, remainder=False)
-    ds = df.PrefetchData(ds, nr_prefetch=5, nr_proc=1)
+    ds = df.PrefetchDataZMQ(ds, nr_proc=1)
     ds.reset_state()
     num_classes = dataset_meta['num_classes'][args.dataset]
     num_images = dataset_meta['num_images'][args.dataset]
-    steps_per_epoch = num_images // args.batchsize
+    steps_per_epoch = num_images // (args.batchsize * device_counts)
     logging.info('build remote feed data (tcp://0.0.0.0:%s)'%str(args.port))
 
     # feed data queue input
-    with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
-        placeholders = [
-            tf.placeholder(tf.float32, (args.batchsize, 224, 224, 3)),
-            tf.placeholder(tf.int64, (args.batchsize,))
-        ]
-        thread = dataflow.tensorflow.QueueInput(
-            ds, placeholders, repeat_infinite=True, queue_size=5)
-        dp_splited = [tf.split(t, device_counts) for t in thread.tensors()]
+    placeholders = []
+    for device_idx in range(device_counts):
+        with tf.device(tf.DeviceSpec(device_type=device_name, device_index=device_idx)):
+            _placeholders = [
+                tf.placeholder(tf.float32, (args.batchsize, 224, 224, 3)),
+                tf.placeholder(tf.int64, (args.batchsize,))
+            ]
+            placeholders.append(_placeholders)
+    with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
+        thread = dataflow.tensorflow.QueueInputMulti(
+            ds, placeholders, repeat_infinite=False, queue_size=50)
     logging.info('build feed data queue thread')
 
     # build model graph
@@ -66,7 +70,7 @@ def main(args):
     for device_idx in range(device_counts):
         with tf.device(tf.DeviceSpec(device_type=device_name, device_index=device_idx)), \
              tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
-            xs, labels = [dp[device_idx] for dp in dp_splited]
+            xs, labels = thread.tensors(device_idx)
 
             model = resnet_model.ResNet(50, num_classes, xs, labels, is_training=True)
             model.build_graph()
@@ -79,13 +83,23 @@ def main(args):
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
         global_step = tf.train.get_or_create_global_step()
 
-        initial_learning_rate = args.learning_rate * args.batchsize / 256
+        initial_learning_rate = args.learning_rate * (args.batchsize * device_counts) / 256
         boundaries = [int(steps_per_epoch * epoch) for epoch in [30, 60, 80, 90]]
         values = [initial_learning_rate * decay for decay in [1, 0.1, 0.01, 1e-3, 1e-4]]
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32), boundaries, values)
+
+        trainable_variables = tf.trainable_variables()
+        tower_grads = zip(*[m.grads for m in models])
+        grads = average_gradients(tower_grads)
+        optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
+        with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+            train_op = optimizer.apply_gradients(zip(grads, trainable_variables), global_step=global_step)
+
+        '''
         optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
         with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
             train_op = optimizer.minimize(loss, global_step, colocate_gradients_with_ops=True)
+        '''
     logging.info('build optimizer')
 
     with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
@@ -105,7 +119,7 @@ def main(args):
         'accuracy': accuracy,
         'accuracy_top5': accuracy_top5,
         'learning_rate': learning_rate,
-        'queue_size': thread.queue_size()
+        'queue_size': [thread.queue_size(idx) for idx in range(device_counts)]
     }
 
     if args.profile:
@@ -114,10 +128,10 @@ def main(args):
     # train loop
     config = tf.ConfigProto(
         intra_op_parallelism_threads=args.process, inter_op_parallelism_threads=args.process,
-        allow_soft_placement=True, log_device_placement=False
+        allow_soft_placement=True, log_device_placement=args.profile
     )
     # with tf.Session(config=config) as sess:
-    #    sess.run(tf.global_variables_initializer())
+    #     sess.run(tf.global_variables_initializer())
     with tf.train.SingularMonitoredSession(
          config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir) as sess:
         thread.start(sess)
@@ -142,9 +156,10 @@ def main(args):
                     'step': step,
                     'steps_per_epoch': steps_per_epoch,
                     'batchsize': args.batchsize,
+                    'device_counts': device_counts,
                     'elapsed': time.time() - start_time
                 })
-                results['images_per_sec'] = results['batchsize'] / results['elapsed']
+                results['images_per_sec'] = (results['batchsize'] * results['device_counts']) / results['elapsed']
                 logging.info(
                     'epoch:{epoch:03d} step:{step:04d}/{steps_per_epoch:04d} '
                     'learning-rate:{learning_rate:.3f} '
@@ -163,7 +178,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='imagenet',
                         help='mnist|cifar10|imagenet')
     parser.add_argument('-n', '--num-gpus', type=int, default=8)
-    parser.add_argument('--process',        type=int, default=4)
+    parser.add_argument('--process',        type=int, default=2)
 
     parser.add_argument('--batchsize',    type=int, default=128)
     parser.add_argument('--port',         type=int, required=True,

@@ -385,6 +385,9 @@ class ResNet(object):
       self.loss = tf.reduce_mean(loss)
       tf.summary.scalar('loss', self.loss)
 
+      trainable_variables = tf.trainable_variables()
+      self.grads = tf.gradients(self.loss, trainable_variables)
+
     with tf.variable_scope('evaluation'):
       correct_prediction1 = tf.nn.in_top_k(logits, self._labels, k=1)
       self.accuracy = tf.reduce_mean(tf.cast(correct_prediction1, tf.float32), name='accuracy_top1')
