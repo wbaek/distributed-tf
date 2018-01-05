@@ -9,9 +9,11 @@ import tensorpack.dataflow as df
 import dataflow
 import dataflow.tensorflow
 from tensorflow.python.client import device_lib
+from tensorflow.python.client import timeline
 
 from utils.imagenet import fbresnet_augmentor
 from networks import resnet_model
+
 
 def main(args):
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in range(args.num_gpus)])
@@ -24,6 +26,7 @@ def main(args):
 
     args.num_gpus = device_counts
     args.batchsize *= device_counts
+    args.process *- device_counts
     logging.info(args)
 
     dataset_meta = {
@@ -40,7 +43,7 @@ def main(args):
     }
     ds = df.RemoteDataZMQ('tcp://0.0.0.0:' + str(args.port))
     ds = df.BatchData(ds, args.batchsize, remainder=False)
-    #ds = df.PrefetchDataZMQ(ds, nr_proc=1)
+    ds = df.PrefetchData(ds, nr_prefetch=5, nr_proc=1)
     ds.reset_state()
     num_classes = dataset_meta['num_classes'][args.dataset]
     num_images = dataset_meta['num_images'][args.dataset]
@@ -105,8 +108,16 @@ def main(args):
         'queue_size': thread.queue_size()
     }
 
+    if args.profile:
+        os.makedirs('./profile/%s/'%args.name, exist_ok=True)
+
     # train loop
-    config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
+    config = tf.ConfigProto(
+        intra_op_parallelism_threads=args.process, inter_op_parallelism_threads=args.process,
+        allow_soft_placement=True, log_device_placement=False
+    )
+    # with tf.Session(config=config) as sess:
+    #    sess.run(tf.global_variables_initializer())
     with tf.train.SingularMonitoredSession(
          config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir) as sess:
         thread.start(sess)
@@ -115,7 +126,17 @@ def main(args):
         for epoch in range(100):
             for step in range(steps_per_epoch):
                 start_time = time.time()
-                results = sess.run(fetches)
+                if args.profile:
+                    options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                    run_metadata = tf.RunMetadata()
+                    results = sess.run(fetches, options=options, run_metadata=run_metadata)
+
+                    fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+                    chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                    with open('./profile/%s/timeline_%04d.json'%(args.name, results['global_step']), 'w') as f:
+                        f.write(chrome_trace)
+                else:
+                    results = sess.run(fetches)
                 results.update({
                     'epoch': epoch,
                     'step': step,
@@ -132,6 +153,7 @@ def main(args):
                     '({images_per_sec:.3f}images/sec queue:{queue_size})'.format_map(results))
 
 
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Imagenet Dataset on Kakao Example')
@@ -141,6 +163,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='imagenet',
                         help='mnist|cifar10|imagenet')
     parser.add_argument('-n', '--num-gpus', type=int, default=8)
+    parser.add_argument('--process',        type=int, default=4)
 
     parser.add_argument('--batchsize',    type=int, default=128)
     parser.add_argument('--port',         type=int, required=True,
@@ -148,6 +171,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--learning-rate', type=float, default=0.1,
                         help='learning rate based on batchsize=256 (default=0.1)')
+
+    parser.add_argument('--profile', action='store_true')
 
     currnet_path = os.path.dirname(os.path.abspath(__file__))
     parser.add_argument('--checkpoint-dir', type=str, default=currnet_path+'/checkpoints/')
