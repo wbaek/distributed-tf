@@ -152,8 +152,8 @@ def main(args):
                 else:
                     results = sess.run(fetches)
                 results.update({
-                    'epoch': epoch,
-                    'step': step,
+                    'epoch': results['global_step']//steps_per_epoch,
+                    'step': results['global_step']%steps_per_epoch,
                     'steps_per_epoch': steps_per_epoch,
                     'batchsize': args.batchsize,
                     'device_counts': device_counts,
