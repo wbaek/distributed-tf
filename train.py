@@ -86,7 +86,7 @@ def main(args):
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32), boundaries, values)
         if args.warmup:
             warmup_iter = float(steps_per_epoch * 5)
-            _ratio = 1.0 / (learning_rate_multiplier * 2)
+            _ratio = 1.0 / (learning_rate_multiplier * 4)
             warmup_ratio = tf.minimum(1.0, (1.0 - _ratio) * (tf.cast(global_step, tf.float32) / warmup_iter) ** 2 + _ratio)
             learning_rate *= warmup_ratio
 
