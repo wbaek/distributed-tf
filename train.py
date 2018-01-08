@@ -79,10 +79,16 @@ def main(args):
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
         global_step = tf.train.get_or_create_global_step()
 
-        initial_learning_rate = args.learning_rate * (args.batchsize * device_counts) / 256.0
+        learning_rate_multiplier = (args.batchsize * device_counts) / 256.0
+        initial_learning_rate = args.learning_rate * learning_rate_multiplier
         boundaries = [int(steps_per_epoch * epoch) for epoch in [30, 60, 80, 90]]
         values = [initial_learning_rate * decay for decay in [1, 0.1, 0.01, 1e-3, 1e-4]]
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32), boundaries, values)
+        if args.warmup:
+            warmup_iter = float(steps_per_epoch * 5)
+            _ratio = 1.0 / (learning_rate_multiplier * 2)
+            warmup_ratio = tf.minimum(1.0, (1.0 - _ratio) * (tf.cast(global_step, tf.float32) / warmup_iter) ** 2 + _ratio)
+            learning_rate *= warmup_ratio
 
         trainable_variables = tf.trainable_variables()
         tower_grads = zip(*[m.grads for m in models])
@@ -96,7 +102,7 @@ def main(args):
     with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
         checkpoint_saver = tf.train.CheckpointSaverHook(
             saver = tf.train.Saver(max_to_keep=100),
-            checkpoint_dir = args.checkpoint_dir, save_steps=steps_per_epoch // 2)
+            checkpoint_dir = args.checkpoint_dir, save_steps=steps_per_epoch)
         summary_saver = tf.train.SummarySaverHook(
             summary_op = tf.summary.merge_all(),
             output_dir = args.summary_dir, save_steps=steps_per_epoch // 30)
@@ -183,8 +189,9 @@ if __name__ == '__main__':
     parser.add_argument('--port',         type=int, required=True,
                         help='must be a set remote mode feeder')
 
-    parser.add_argument('--learning-rate', type=float, default=0.1,
-                        help='learning rate based on batchsize=256 (default=0.1)')
+    parser.add_argument('--warmup',        action='store_true')
+    parser.add_argument('--learning-rate', type=float, default=0.01,
+                        help='learning rate based on batchsize=256 (default=0.01)')
 
     parser.add_argument('--profile', action='store_true')
 
