@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import time
 import logging
@@ -26,8 +27,7 @@ def main(args):
     logging.info({'devices': devices, 'device_name': device_name, 'device_counts': device_counts})
 
     args.num_gpus = device_counts
-    #args.batchsize *= device_counts
-    args.process *- device_counts
+    args.process *= device_counts
     logging.info(args)
 
     dataset_meta = {
@@ -52,17 +52,13 @@ def main(args):
     logging.info('build remote feed data (tcp://0.0.0.0:%s)'%str(args.port))
 
     # feed data queue input
-    placeholders = []
-    for device_idx in range(device_counts):
-        with tf.device(tf.DeviceSpec(device_type=device_name, device_index=device_idx)):
-            _placeholders = [
-                tf.placeholder(tf.float32, (args.batchsize, 224, 224, 3)),
-                tf.placeholder(tf.int64, (args.batchsize,))
-            ]
-            placeholders.append(_placeholders)
     with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
-        thread = dataflow.tensorflow.QueueInputMulti(
-            ds, placeholders, repeat_infinite=False, queue_size=50)
+        _placeholders = [
+            tf.placeholder(tf.float32, (args.batchsize, 224, 224, 3)),
+            tf.placeholder(tf.int64, (args.batchsize,))
+        ]
+        thread = dataflow.tensorflow.QueueInput(
+            ds, _placeholders, repeat_infinite=False, queue_size=50)
     logging.info('build feed data queue thread')
 
     # build model graph
@@ -70,7 +66,7 @@ def main(args):
     for device_idx in range(device_counts):
         with tf.device(tf.DeviceSpec(device_type=device_name, device_index=device_idx)), \
              tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
-            xs, labels = thread.tensors(device_idx)
+            xs, labels = thread.tensors()
 
             model = resnet_model.ResNet(50, num_classes, xs, labels, is_training=True)
             model.build_graph()
@@ -83,7 +79,7 @@ def main(args):
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
         global_step = tf.train.get_or_create_global_step()
 
-        initial_learning_rate = args.learning_rate * (args.batchsize * device_counts) / 256
+        initial_learning_rate = args.learning_rate * (args.batchsize * device_counts) / 256.0
         boundaries = [int(steps_per_epoch * epoch) for epoch in [30, 60, 80, 90]]
         values = [initial_learning_rate * decay for decay in [1, 0.1, 0.01, 1e-3, 1e-4]]
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32), boundaries, values)
@@ -95,14 +91,9 @@ def main(args):
         with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
             train_op = optimizer.apply_gradients(zip(grads, trainable_variables), global_step=global_step)
 
-        '''
-        optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
-        with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-            train_op = optimizer.minimize(loss, global_step, colocate_gradients_with_ops=True)
-        '''
     logging.info('build optimizer')
 
-    with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
+    with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
         checkpoint_saver = tf.train.CheckpointSaverHook(
             saver = tf.train.Saver(max_to_keep=100),
             checkpoint_dir = args.checkpoint_dir, save_steps=steps_per_epoch // 2)
@@ -119,21 +110,29 @@ def main(args):
         'accuracy': accuracy,
         'accuracy_top5': accuracy_top5,
         'learning_rate': learning_rate,
-        'queue_size': [thread.queue_size(idx) for idx in range(device_counts)]
+        'queue_size': thread.queue_size(),
     }
 
     if args.profile:
-        os.makedirs('./profile/%s/'%args.name, exist_ok=True)
+        folder = './profile/%s/'%args.name
+        if os.path.exists(folder) and os.path.isdir(folder):
+            shutil.rmtree(folder)
+        os.makedirs(folder, exist_ok=True)
 
     # train loop
     config = tf.ConfigProto(
-        intra_op_parallelism_threads=args.process, inter_op_parallelism_threads=args.process,
+        intra_op_parallelism_threads=args.process, inter_op_parallelism_threads=args.process*2,
         allow_soft_placement=True, log_device_placement=args.profile
     )
-    # with tf.Session(config=config) as sess:
-    #     sess.run(tf.global_variables_initializer())
-    with tf.train.SingularMonitoredSession(
-         config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir) as sess:
+
+    if args.profile: 
+        sess = tf.Session(config=config)
+        sess.run(tf.global_variables_initializer())
+    else:
+        sess = tf.train.SingularMonitoredSession(
+         config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir)
+
+    with sess:
         thread.start(sess)
         logging.info('start feed data queue thread')
 

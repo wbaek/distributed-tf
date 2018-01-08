@@ -380,13 +380,11 @@ class ResNet(object):
 
     with tf.variable_scope('losses'):
       cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=self._labels)
-      loss = cross_entropy + WEIGHT_DECAY * tf.add_n(
+      self.loss = cross_entropy + WEIGHT_DECAY * tf.add_n(
           [tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'batch_normalization' not in v.name])
-      self.loss = tf.reduce_mean(loss)
-      tf.summary.scalar('loss', self.loss)
+      tf.summary.scalar('loss', tf.reduce_mean(self.loss))
 
-      trainable_variables = tf.trainable_variables()
-      self.grads = tf.gradients(self.loss, trainable_variables)
+      self.grads = tf.gradients(self.loss, tf.trainable_variables())
 
     with tf.variable_scope('evaluation'):
       correct_prediction1 = tf.nn.in_top_k(logits, self._labels, k=1)
