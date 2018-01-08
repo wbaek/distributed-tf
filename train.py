@@ -73,7 +73,8 @@ def main(args):
             models.append(model)
     logging.info('build graph model')
 
-    with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
+    #with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
+    if True:
         loss = tf.reduce_mean([m.loss for m in models], name='loss')
         accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
