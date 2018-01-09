@@ -4,7 +4,6 @@ import sys
 import time
 import logging
 
-import cv2
 import tensorflow as tf
 import tensorpack.dataflow as df
 import dataflow
@@ -12,7 +11,6 @@ import dataflow.tensorflow
 from tensorflow.python.client import device_lib
 from tensorflow.python.client import timeline
 
-from utils.imagenet import fbresnet_augmentor
 from utils.utils import average_gradients
 from networks import resnet_model
 
@@ -31,12 +29,12 @@ def main(args):
     logging.info(args)
 
     dataset_meta = {
-        'num_classes':{
+        'num_classes': {
             'imagenet': 1000,
             'cifar10': 10,
             'mnist': 10,
         },
-        'num_images':{
+        'num_images': {
             'imagenet': 1281167,
             'cifar10': 50000,
             'mnist': 60000,
@@ -48,7 +46,7 @@ def main(args):
     num_classes = dataset_meta['num_classes'][args.dataset]
     num_images = dataset_meta['num_images'][args.dataset]
     steps_per_epoch = num_images // (args.batchsize * device_counts)
-    logging.info('build remote feed data (tcp://0.0.0.0:%s)'%str(args.port))
+    logging.info('build remote feed data (tcp://0.0.0.0:%s)' % str(args.port))
 
     # feed data queue input
     with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
@@ -72,40 +70,37 @@ def main(args):
             models.append(model)
     logging.info('build graph model')
 
-    #with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
-    if True:
-        loss = tf.reduce_mean([m.loss for m in models], name='loss')
-        accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
-        accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
-        global_step = tf.train.get_or_create_global_step()
+    loss = tf.reduce_mean([m.loss for m in models], name='loss')
+    accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
+    accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
+    global_step = tf.train.get_or_create_global_step()
 
-        learning_rate_multiplier = (args.batchsize * device_counts) / 256.0
-        initial_learning_rate = args.learning_rate * learning_rate_multiplier
-        boundaries = [int(steps_per_epoch * epoch) for epoch in [30, 60, 80, 90]]
-        values = [initial_learning_rate * decay for decay in [1, 0.1, 0.01, 1e-3, 1e-4]]
-        learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32), boundaries, values)
-        if args.warmup:
-            warmup_iter = float(steps_per_epoch * 5)
-            _ratio = 1.0 / (learning_rate_multiplier * 4)
-            warmup_ratio = tf.minimum(1.0, (1.0 - _ratio) * (tf.cast(global_step, tf.float32) / warmup_iter) ** 2 + _ratio)
-            learning_rate *= warmup_ratio
+    learning_rate_multiplier = (args.batchsize * device_counts) / 256.0
+    initial_learning_rate = args.learning_rate * learning_rate_multiplier
+    boundaries = [int(steps_per_epoch * epoch) for epoch in [30, 60, 80, 90]]
+    values = [initial_learning_rate * decay for decay in [1, 0.1, 0.01, 1e-3, 1e-4]]
+    learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32), boundaries, values)
+    if args.warmup:
+        warmup_iter = float(steps_per_epoch * 5)
+        _ratio = 1.0 / (learning_rate_multiplier * 4)
+        warmup_ratio = tf.minimum(1.0, (1.0 - _ratio) * (tf.cast(global_step, tf.float32) / warmup_iter) ** 2 + _ratio)
+        learning_rate *= warmup_ratio
 
-        trainable_variables = tf.trainable_variables()
-        tower_grads = zip(*[m.grads for m in models])
-        grads = average_gradients(tower_grads)
-        optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
-        with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-            train_op = optimizer.apply_gradients(zip(grads, trainable_variables), global_step=global_step)
-
+    trainable_variables = tf.trainable_variables()
+    tower_grads = zip(*[m.grads for m in models])
+    grads = average_gradients(tower_grads)
+    optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
+    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+        train_op = optimizer.apply_gradients(zip(grads, trainable_variables), global_step=global_step)
     logging.info('build optimizer')
 
     with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
         checkpoint_saver = tf.train.CheckpointSaverHook(
-            saver = tf.train.Saver(max_to_keep=100),
-            checkpoint_dir = args.checkpoint_dir, save_steps=steps_per_epoch)
+            saver=tf.train.Saver(max_to_keep=100),
+            checkpoint_dir=args.checkpoint_dir, save_steps=steps_per_epoch)
         summary_saver = tf.train.SummarySaverHook(
-            summary_op = tf.summary.merge_all(),
-            output_dir = args.summary_dir, save_steps=steps_per_epoch // 30)
+            summary_op=tf.summary.merge_all(),
+            output_dir=args.summary_dir, save_steps=steps_per_epoch // 30)
         hooks = [checkpoint_saver, summary_saver]
     logging.info('build hooks')
 
@@ -120,7 +115,7 @@ def main(args):
     }
 
     if args.profile:
-        folder = './profile/%s/'%args.name
+        folder = './profile/%s/' % args.name
         if os.path.exists(folder) and os.path.isdir(folder):
             shutil.rmtree(folder)
         os.makedirs(folder, exist_ok=True)
@@ -152,13 +147,13 @@ def main(args):
 
                     fetched_timeline = timeline.Timeline(run_metadata.step_stats)
                     chrome_trace = fetched_timeline.generate_chrome_trace_format()
-                    with open('./profile/%s/timeline_%04d.json'%(args.name, results['global_step']), 'w') as f:
+                    with open('./profile/%s/timeline_%04d.json' % (args.name, results['global_step']), 'w') as f:
                         f.write(chrome_trace)
                 else:
                     results = sess.run(fetches)
                 results.update({
-                    'epoch': results['global_step']//steps_per_epoch,
-                    'step': results['global_step']%steps_per_epoch,
+                    'epoch': results['global_step'] // steps_per_epoch,
+                    'step': results['global_step'] % steps_per_epoch,
                     'steps_per_epoch': steps_per_epoch,
                     'batchsize': args.batchsize,
                     'device_counts': device_counts,
@@ -171,7 +166,6 @@ def main(args):
                     'loss:{loss:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
                     'elapsed:{elapsed:.1f}sec '
                     '({images_per_sec:.3f}images/sec queue:{queue_size})'.format_map(results))
-
 
 
 if __name__ == '__main__':
@@ -211,4 +205,3 @@ if __name__ == '__main__':
     logging.getLogger("requests").setLevel(logging.WARNING)
 
     main(args)
-

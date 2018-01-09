@@ -1,6 +1,4 @@
-import os
 import sys
-import time
 import logging
 
 import cv2
@@ -41,14 +39,14 @@ def get_datastream(dataset, mode, batchsize=0, service_code=None, processes=1, t
     ds = df.PrefetchDataZMQ(ds, nr_proc=processes)
     return ds, num_classes
 
+
 def main(args):
     logging.info(args)
 
     ds, num_classes = get_datastream(
         args.dataset, args.mode, args.batchsize,
         args.service_code, args.process, args.threads)
-    #ds = df.RepeatedData(ds, -1)
-    #ds = df.TestDataSpeed(ds, ds.size())
+    # ds = df.RepeatedData(ds, -1)
     logging.info('build feed data')
 
     while True:
@@ -57,7 +55,6 @@ def main(args):
             df.send_dataflow_zmq(ds, args.target)
         except Exception as e:
             logging.warning('%s exception: %s', str(e))
-
 
 
 if __name__ == '__main__':
