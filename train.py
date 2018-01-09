@@ -14,7 +14,7 @@ from networks import resnet_model
 def main(args):
     with open(args.config, 'r') as f:
         configs = json.load(f)
-    device = devices.get_devices(args.num_gpus)
+    device = devices.get_devices(gpu_ids=args.gpus)
     params = configs['params']
     params['steps_per_epoch'] = params['dataset']['images'] // (params['batchsize'] * device['count'])
     logging.info('\nargs=%s\nconfig=%s\ndevice=%s', args, configs, device)
@@ -98,7 +98,8 @@ if __name__ == '__main__':
                         help='config json file')
     parser.add_argument('--name', type=str, required=True,
                         help='project name')
-    parser.add_argument('-n', '--num-gpus', type=int, default=-1)
+    parser.add_argument('-g', '--gpus', nargs='*',
+                        help='set gpu index (--gpus 0, 1)')
     parser.add_argument('--port',         type=int, required=True,
                         help='must be a set remote mode feeder')
 
