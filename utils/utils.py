@@ -5,7 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def run_session_with_profile(sess, fetchs, profile_dir='./profile/temp/'):
+def run_session_with_profile(sess, fetches, profile_dir='./profile/temp/'):
     options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
     run_metadata = tf.RunMetadata()
     results = sess.run(fetches, options=options, run_metadata=run_metadata)
