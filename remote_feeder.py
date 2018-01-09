@@ -10,7 +10,7 @@ import dataflow
 from utils.imagenet import fbresnet_augmentor
 
 
-def get_datastream(dataset, mode, service_code=None, processes=1, threads=1):
+def get_datastream(dataset, mode, batchsize=0, service_code=None, processes=1, threads=1):
     # data feeder
     augmentors = fbresnet_augmentor(isTrain=(mode == 'train'))
     if dataset == 'imagenet':
@@ -36,6 +36,8 @@ def get_datastream(dataset, mode, service_code=None, processes=1, threads=1):
         raise ValueError('%s is not support dataset' % dataset)
  
     ds = df.AugmentImageComponent(ds, augmentors, copy=False)
+    if batchsize > 0:
+        ds = df.BatchData(ds, batchsize, remainder=False)
     ds = df.PrefetchDataZMQ(ds, nr_proc=processes)
     return ds, num_classes
 
@@ -43,7 +45,7 @@ def main(args):
     logging.info(args)
 
     ds, num_classes = get_datastream(
-        args.dataset, args.mode,
+        args.dataset, args.mode, args.batchsize,
         args.service_code, args.process, args.threads)
     #ds = df.RepeatedData(ds, -1)
     #ds = df.TestDataSpeed(ds, ds.size())
@@ -66,6 +68,7 @@ if __name__ == '__main__':
                         help='mnist|cifar10|imagenet')
     parser.add_argument('--mode', type=str, default='train',
                         help='train or valid or test')
+    parser.add_argument('--batchsize', type=int, default=-1)
 
     parser.add_argument('--service-code', type=str, default='',
                         help='licence key')

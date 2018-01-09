@@ -43,7 +43,6 @@ def main(args):
         }
     }
     ds = df.RemoteDataZMQ('tcp://0.0.0.0:' + str(args.port))
-    ds = df.BatchData(ds, args.batchsize, remainder=False)
     ds = df.PrefetchDataZMQ(ds, nr_proc=1)
     ds.reset_state()
     num_classes = dataset_meta['num_classes'][args.dataset]
