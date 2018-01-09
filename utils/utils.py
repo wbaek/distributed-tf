@@ -1,3 +1,5 @@
+import os
+
 import tensorflow as tf
 from tensorflow.python.client import timeline
 
