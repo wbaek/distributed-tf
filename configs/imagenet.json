@@ -5,7 +5,7 @@
         ],
         "worker": [
             "brain-cluster-gpu1.dakao.io:1032",
-            "brain-cluster-gpu2.dakao.io:1032"
+            "brain-cluster-gpu2.dakao.io:1033"
         ]
     },
     "params": {

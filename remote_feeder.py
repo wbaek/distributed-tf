@@ -65,7 +65,7 @@ if __name__ == '__main__':
                         help='mnist|cifar10|imagenet')
     parser.add_argument('--mode', type=str, default='train',
                         help='train or valid or test')
-    parser.add_argument('--batchsize', type=int, default=-1)
+    parser.add_argument('--batchsize', type=int, default=128)
 
     parser.add_argument('--service-code', type=str, default='',
                         help='licence key')
