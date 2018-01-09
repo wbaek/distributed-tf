@@ -1,21 +1,19 @@
 import tensorflow as tf
+from tensorflow.python.client import timeline
 
-def average_gradients(tower_grads):
-  average_grads = []
-  for grad in tower_grads:
-    # Note that each grad_and_vars looks like the following:
-    #   ((grad0_gpu0, var0_gpu0), ... , (grad0_gpuN, var0_gpuN))
-    grads = []
-    for g in grad:
-      # Add 0 dimension to the gradients to represent the tower.
-      expanded_g = tf.expand_dims(g, 0)
+import logging
+logger = logging.getLogger(__name__)
 
-      # Append on a 'tower' dimension which we will average over below.
-      grads.append(expanded_g)
 
-    # Average over the 'tower' dimension.
-    grad = tf.concat(grads, 0)
-    grad = tf.reduce_mean(grad, 0)
+def run_session_with_profile(sess, fetchs, profile_dir='./profile/temp/'):
+    options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+    run_metadata = tf.RunMetadata()
+    results = sess.run(fetches, options=options, run_metadata=run_metadata)
 
-    average_grads.append(grad)
-  return average_grads
+    fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+    chrome_trace = fetched_timeline.generate_chrome_trace_format()
+
+    os.makedirs(profile_dir, exist_ok=True)
+    with open('%s/timeline_%04d.json' % (profile_dir, results['global_step']), 'w') as f:
+        f.write(chrome_trace)
+    return results
