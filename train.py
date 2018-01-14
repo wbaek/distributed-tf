@@ -50,6 +50,13 @@ def main(args):
             train_op = optimizer.apply_gradients(zip(grads, tf.trainable_variables()), global_step=global_step)
     logging.info('build optimizer')
 
+    with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
+        checkpoint_saver = tf.train.CheckpointSaverHook(
+            saver=tf.train.Saver(max_to_keep=100),
+            checkpoint_dir=args.checkpoint_dir, save_steps=params['steps_per_epoch'])
+        hooks = [checkpoint_saver]
+    logging.info('build hooks')
+
     fetches = {
         'ops': [train_op],
         'global_step': global_step, 'learning_rate': learning_rate,
@@ -63,8 +70,7 @@ def main(args):
         allow_soft_placement=True, log_device_placement=args.profile,
         gpu_options = tf.GPUOptions(allow_growth=False, force_gpu_compatible=True),
     )
-    with tf.Session(config=config) as sess:
-        sess.run(tf.global_variables_initializer())
+    with tf.train.SingularMonitoredSession(config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir) as sess:
         thread.start(sess)
         logging.info('start feed data queue thread')
 
