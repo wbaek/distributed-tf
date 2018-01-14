@@ -7,19 +7,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def build_remote_feeder_thread(port, batchsize): 
+def build_remote_feeder_thread(port, batchsize, input_shape=(224, 224, 3), queue_size=50):
     ds = df.RemoteDataZMQ('tcp://0.0.0.0:' + str(port))
     ds = df.PrefetchDataZMQ(ds, nr_proc=1)
     ds.reset_state()
 
     # feed data queue input
-    with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
-        _placeholders = [
-            tf.placeholder(tf.float32, (batchsize, 224, 224, 3)),
-            tf.placeholder(tf.int64, (batchsize,))
-        ]
-        thread = dataflow.tensorflow.QueueInput(
-            ds, _placeholders, repeat_infinite=False, queue_size=50)
+    _placeholders = [
+        tf.placeholder(tf.float32, (batchsize,) + input_shape),
+        tf.placeholder(tf.int64, (batchsize,))
+    ]
+    thread = dataflow.tensorflow.QueueInput(
+        ds, _placeholders, repeat_infinite=False, queue_size=queue_size)
     return thread
 
 def build_learning_rate(global_step, device_count, params):

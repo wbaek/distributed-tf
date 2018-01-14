@@ -19,7 +19,8 @@ def main(args):
     params['steps_per_epoch'] = params['dataset']['images'] // (params['batchsize'] * device['count'])
     logging.info('\nargs=%s\nconfig=%s\ndevice=%s', args, configs, device)
 
-    thread = train.build_remote_feeder_thread(args.port, params['batchsize'])
+    with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
+        thread = train.build_remote_feeder_thread(args.port, params['batchsize'])
     logging.info('build feeder thread')
 
     # build model graph
@@ -34,17 +35,19 @@ def main(args):
             models.append(model)
     logging.info('build graph model')
 
-    global_step = tf.train.get_or_create_global_step()
-    learning_rate = train.build_learning_rate(global_step, device['count'], params)
-    loss = tf.reduce_mean([m.loss for m in models], name='loss')
-    accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
-    accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
+    with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
+        global_step = tf.train.get_or_create_global_step()
+        learning_rate = train.build_learning_rate(global_step, device['count'], params)
+        loss = tf.reduce_mean([m.loss for m in models], name='loss')
+        accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
+        accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
     logging.info('build variables')
 
-    optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
-    grads = train.average_gradients(zip(*[m.grads for m in models]))
-    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-        train_op = optimizer.apply_gradients(zip(grads, tf.trainable_variables()), global_step=global_step)
+    with tf.device(tf.DeviceSpec(device_type=device['name'], device_index=0)):
+        optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
+        grads = train.average_gradients(zip(*[m.grads for m in models]))
+        with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+            train_op = optimizer.apply_gradients(zip(grads, tf.trainable_variables()), global_step=global_step)
     logging.info('build optimizer')
 
     fetches = {
@@ -57,7 +60,8 @@ def main(args):
     config = tf.ConfigProto(
         intra_op_parallelism_threads=params['num_process_per_gpu']*device['count'],
         inter_op_parallelism_threads=params['num_process_per_gpu']*device['count']*2,
-        allow_soft_placement=True, log_device_placement=args.profile
+        allow_soft_placement=True, log_device_placement=args.profile,
+        gpu_options = tf.GPUOptions(allow_growth=False, force_gpu_compatible=True),
     )
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
