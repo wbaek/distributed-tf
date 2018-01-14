@@ -36,26 +36,16 @@ def main(args):
 
     global_step = tf.train.get_or_create_global_step()
     learning_rate = train.build_learning_rate(global_step, device['count'], params)
-    optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
-    logging.info('build optimzer')
-
-    grads = train.average_gradients(zip(*[m.grads for m in models]))
-    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-        train_op = optimizer.apply_gradients(zip(grads, tf.trainable_variables()), global_step=global_step)
     loss = tf.reduce_mean([m.loss for m in models], name='loss')
     accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
     accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
     logging.info('build variables')
 
-    with tf.device(tf.DeviceSpec(device_type='CPU', device_index=0)):
-        checkpoint_saver = tf.train.CheckpointSaverHook(
-            saver=tf.train.Saver(max_to_keep=100),
-            checkpoint_dir=args.checkpoint_dir, save_steps=params['steps_per_epoch'])
-        summary_saver = tf.train.SummarySaverHook(
-            summary_op=tf.summary.merge_all(),
-            output_dir=args.summary_dir, save_steps=params['steps_per_epoch'] // 30)
-        hooks = [checkpoint_saver, summary_saver]
-    logging.info('build hooks')
+    optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
+    grads = train.average_gradients(zip(*[m.grads for m in models]))
+    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+        train_op = optimizer.apply_gradients(zip(grads, tf.trainable_variables()), global_step=global_step)
+    logging.info('build optimizer')
 
     fetches = {
         'ops': [train_op],
@@ -69,7 +59,8 @@ def main(args):
         inter_op_parallelism_threads=params['num_process_per_gpu']*device['count']*2,
         allow_soft_placement=True, log_device_placement=args.profile
     )
-    with tf.train.SingularMonitoredSession(config=config, hooks=hooks, checkpoint_dir=args.checkpoint_dir) as sess:
+    with tf.Session(config=config) as sess:
+        sess.run(tf.global_variables_initializer())
         thread.start(sess)
         logging.info('start feed data queue thread')
 
@@ -85,7 +76,7 @@ def main(args):
                 results['images_per_sec'] = (results['batchsize'] * results['device_counts']) / results['elapsed']
                 logging.info(
                     'epoch:{epoch:03d} step:{step:04d}/{steps_per_epoch:04d} '
-                    'learning-rate:{learning_rate:.3f} '
+                    'learning-rate:{learning_rate:.5f} '
                     'loss:{loss:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
                     'elapsed:{elapsed:.1f}sec '
                     '({images_per_sec:.3f}images/sec queue:{queue_size})'.format_map(results))

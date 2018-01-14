@@ -26,10 +26,10 @@ def build_learning_rate(global_step, device_count, params):
     return _build_learning_rate(global_step, device_count, params['steps_per_epoch'], params['batchsize'], params['learning_rate']['initial'], params['learning_rate']['warmup'])
 
 def _build_learning_rate(global_step, device_count, steps_per_epoch, batchsize, initial_learning_rate, warmup=True):
-    multiplier = (batchsize * device_count) / 256.0
+    multiplier = (batchsize * device_count) / 128.0
     initial_learning_rate = initial_learning_rate * multiplier
-    boundaries = [int(steps_per_epoch * epoch) for epoch in [30, 60, 80, 90]]
-    values = [initial_learning_rate * decay for decay in [1, 0.1, 0.01, 1e-3, 1e-4]]
+    boundaries = [int(steps_per_epoch * epoch) for epoch in [20, 40, 60, 80, 90]]
+    values = [initial_learning_rate * decay for decay in [1, 0.1, 0.01, 1e-3, 1e-4, 1e-5]]
 
     learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32), boundaries, values)
     if warmup:

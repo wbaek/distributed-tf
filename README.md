@@ -5,7 +5,7 @@
 export TENSORPACK_DATASET=/data/private/storage/tensorpack_data
 
 python3 remote_feeder.py --batchsize 128 --dataset imagenet --service-code CONTACT_ME -p 15 --target tcp://localhost:1028
-python3 train.py -c configs/imagenet.json --gpus 0 1 --port 1028 --name imagenet_batch128_gpu8
+python3 train.py -c configs/imagenet.json --gpus 0 1 --port 1028 --name imagenet_batch128_gpu2
 ```
 
 * multi node multi gpus
