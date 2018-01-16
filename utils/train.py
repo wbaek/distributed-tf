@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 def build_remote_feeder_thread(port, batchsize, input_shape=(224, 224, 3), queue_size=50):
     ds = df.RemoteDataZMQ('tcp://0.0.0.0:' + str(port))
-    ds = df.PrefetchDataZMQ(ds, nr_proc=1)
+    #ds = df.PrefetchDataZMQ(ds, nr_proc=1)
     ds.reset_state()
 
     # feed data queue input

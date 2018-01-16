@@ -15,7 +15,7 @@
         },
         "batchsize": 128,
         "learning_rate": {
-            "initial": 0.025,
+            "initial": 0.005,
             "warmup": true
         },
         "steps_per_epoch": 10009,
