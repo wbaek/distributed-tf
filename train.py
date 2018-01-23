@@ -10,6 +10,12 @@ import tensorflow as tf
 from utils import utils, train, devices
 from networks import resnet_model
 
+current_index = 0
+def get_device_spec(device):
+    global current_index
+    current_index = current_index + 1
+    current_index = current_index % device['count']
+    return tf.DeviceSpec(device_type=device['name'], device_index=current_index)
 
 def main(args):
     with open(args.config, 'r') as f:
@@ -19,14 +25,16 @@ def main(args):
     params['steps_per_epoch'] = params['dataset']['images'] // (params['batchsize'] * device['count'])
     logging.info('\nargs=%s\nconfig=%s\ndevice=%s', args, configs, device)
 
-    thread = train.build_remote_feeder_thread(args.port, params['batchsize'], queue_size=device['count']*5, is_fake=args.fake)
+    with tf.device(get_device_spec(device)):
+        thread = train.build_remote_feeder_thread(args.port, params['batchsize'], queue_size=device['count']*5, is_fake=args.fake)
     logging.info('build feeder thread')
 
     # build model graph
     models = []
     for device_index in range(device['count']):
-        with tf.device(tf.DeviceSpec(device_type=device['name'], device_index=device_index)), \
-             tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+        device_spec = tf.DeviceSpec(device_type=device['name'], device_index=device_index)
+        with tf.device(tf.train.replica_device_setter(worker_device=device_spec.to_string(), ps_device='/cpu:0', ps_tasks=1)), \
+             tf.variable_scope('network', reuse=tf.AUTO_REUSE):
             xs, labels = thread.tensors()
 
             model = resnet_model.ResNet(50, params['dataset']['classes'], xs, labels, is_training=True)
@@ -34,17 +42,19 @@ def main(args):
             models.append(model)
     logging.info('build graph model')
 
-    global_step = tf.train.get_or_create_global_step()
-    learning_rate = train.build_learning_rate(global_step, device['count'], params)
-    loss = tf.reduce_mean([m.loss for m in models], name='loss')
-    accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
-    accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
+    with tf.device(get_device_spec(device)):
+        global_step = tf.train.get_or_create_global_step()
+        learning_rate = train.build_learning_rate(global_step, device['count'], params)
+        loss = tf.reduce_mean([m.loss for m in models], name='loss')
+        accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
+        accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
     logging.info('build variables')
 
-    grads = train.average_gradients(zip(*[m.grads for m in models]))
-    optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
-    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-        train_op = optimizer.apply_gradients(zip(grads, tf.trainable_variables()), global_step=global_step)
+    with tf.device(get_device_spec(device)):
+        grads = train.average_gradients(zip(*[m.grads for m in models]))
+        optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
+        with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+            train_op = optimizer.apply_gradients(zip(grads, tf.trainable_variables()), global_step=global_step)
     logging.info('build optimizer')
 
     checkpoint_saver = tf.train.CheckpointSaverHook(
