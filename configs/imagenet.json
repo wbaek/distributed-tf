@@ -1,10 +1,13 @@
 {
     "cluster_spec": {
         "ps": [
-            "brain-cluster-gpu15.dakao.io:1030"
+            "localhost:1030"
         ],
         "worker": [
-            "brain-cluster-gpu2.dakao.io:1032"
+            "localhost:1032",
+            "localhost:1033",
+            "localhost:1034",
+            "localhost:1035"
         ]
     },
     "params": {
@@ -15,7 +18,7 @@
         },
         "batchsize": 128,
         "learning_rate": {
-            "initial": 0.005,
+            "initial": 0.002,
             "warmup": true
         },
         "steps_per_epoch": 10009,

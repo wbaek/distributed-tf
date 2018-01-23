@@ -12,42 +12,10 @@ from tensorflow.python.client import device_lib
 from utils.imagenet import fbresnet_augmentor
 from networks import resnet_model
 
-
-def get_datastream(dataset, mode, batchsize, service_code=None, processes=1, threads=1):
-    # data feeder
-    augmentors = fbresnet_augmentor(isTrain=(mode == 'train'))
-    if dataset == 'imagenet':
-        if len(service_code) < 0:
-            raise ValueError('image is must be a set service-code')
-        ds = dataflow.dataset.ILSVRC12(service_code, mode, shuffle=True).parallel(num_threads=threads)
-        num_classes = 1000
-    elif dataset == 'mnist':
-        ds = df.dataset.Mnist(mode, shuffle=True)
-        augmentors = [
-            df.imgaug.MapImage(lambda x: x.reshape(28, 28, 1)),
-            df.imgaug.ColorSpace(cv2.COLOR_GRAY2BGR),
-            df.imgaug.Resize((256, 256))
-        ] + augmentors
-        num_classes = 10
-    elif dataset == 'cifar10':
-        ds = df.dataset.Cifar10(mode, shuffle=True)
-        augmentors = [
-            df.imgaug.Resize((256, 256))
-        ] + augmentors
-        num_classes = 10
-    else:
-        raise ValueError('%s is not support dataset' % dataset)
- 
-    ds = df.AugmentImageComponent(ds, augmentors, copy=False)
-    ds = df.PrefetchDataZMQ(ds, nr_proc=processes)
-    ds = df.BatchData(ds, batchsize, remainder=not (mode == 'train'))
-    ds.reset_state()
-
-    return ds, num_classes
-
+from remote_feeder import get_datastream
 
 def main(args):
-    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in range(args.num_gpus)])
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in args.gpus])
     devices = device_lib.list_local_devices()
     num_gpus = len([d for d in devices if 'GPU' in d.device_type])
 
@@ -61,6 +29,8 @@ def main(args):
 
     # feed data queue input
     with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
+        ds = get_datastream(args.dataset, args.mode, args.batchsize, args.service_code, args.process, args.threads)
+
         placeholders = [
             tf.placeholder(tf.float32, (args.batchsize, 224, 224, 3)),
             tf.placeholder(tf.int64, (args.batchsize,))
