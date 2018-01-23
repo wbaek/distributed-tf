@@ -19,7 +19,7 @@ def main(args):
     params['steps_per_epoch'] = params['dataset']['images'] // (params['batchsize'] * device['count'])
     logging.info('\nargs=%s\nconfig=%s\ndevice=%s', args, configs, device)
 
-    thread = train.build_remote_feeder_thread(args.port, params['batchsize'], queue_size=device['count']*5)
+    thread = train.build_remote_feeder_thread(args.port, params['batchsize'], queue_size=device['count']*5, is_fake=args.fake)
     logging.info('build feeder thread')
 
     # build model graph
@@ -99,6 +99,8 @@ if __name__ == '__main__':
                         help='set gpu index (--gpus 0, 1)')
     parser.add_argument('--port',         type=int, required=True,
                         help='must be a set remote mode feeder')
+    parser.add_argument('--fake', action='store_true',
+                        help='using fake data')
 
     currnet_path = os.path.dirname(os.path.abspath(__file__))
     parser.add_argument('--checkpoint-dir', type=str, default=currnet_path+'/checkpoints/')
