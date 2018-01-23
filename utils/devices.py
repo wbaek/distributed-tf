@@ -1,5 +1,6 @@
 import os
 
+import tensorflow as tf
 from tensorflow.python.client import device_lib
 
 import logging
@@ -16,4 +17,12 @@ def get_devices(gpu_ids=[], max_gpus=-1):
     device_name = 'GPU' if num_gpus > 0 else 'CPU'
     device_counts = num_gpus if num_gpus > 0 else 1
     return {'name':device_name, 'count':device_counts}
+
+current_index = 0
+def get_device_spec(device, _next=False):
+    global current_index
+    if _next:
+        current_index = current_index + 1
+        current_index = current_index % device['count']
+    return tf.DeviceSpec(device_type=device['name'], device_index=current_index)
 

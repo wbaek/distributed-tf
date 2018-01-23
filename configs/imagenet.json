@@ -1,13 +1,12 @@
 {
     "cluster_spec": {
         "ps": [
-            "localhost:1030"
+            "worker1:2222"
         ],
         "worker": [
-            "localhost:1032",
-            "localhost:1033",
-            "localhost:1034",
-            "localhost:1035"
+            "worker2:2222",
+            "worker3:2222",
+            "worker4:2222"
         ]
     },
     "params": {
@@ -18,7 +17,7 @@
         },
         "batchsize": 128,
         "learning_rate": {
-            "initial": 0.002,
+            "initial": 0.001,
             "warmup": true
         },
         "steps_per_epoch": 10009,

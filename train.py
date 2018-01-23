@@ -10,13 +10,6 @@ import tensorflow as tf
 from utils import utils, train, devices
 from networks import resnet_model
 
-current_index = 0
-def get_device_spec(device):
-    global current_index
-    current_index = current_index + 1
-    current_index = current_index % device['count']
-    return tf.DeviceSpec(device_type=device['name'], device_index=current_index)
-
 def main(args):
     with open(args.config, 'r') as f:
         configs = json.load(f)
@@ -25,7 +18,7 @@ def main(args):
     params['steps_per_epoch'] = params['dataset']['images'] // (params['batchsize'] * device['count'])
     logging.info('\nargs=%s\nconfig=%s\ndevice=%s', args, configs, device)
 
-    with tf.device(get_device_spec(device)):
+    with tf.device(devices.get_device_spec(device, _next=True)):
         thread = train.build_remote_feeder_thread(args.port, params['batchsize'], queue_size=device['count']*5, is_fake=args.fake)
     logging.info('build feeder thread')
 
@@ -42,7 +35,7 @@ def main(args):
             models.append(model)
     logging.info('build graph model')
 
-    with tf.device(get_device_spec(device)):
+    with tf.device(devices.get_device_spec(device, _next=True)):
         global_step = tf.train.get_or_create_global_step()
         learning_rate = train.build_learning_rate(global_step, device['count'], params)
         loss = tf.reduce_mean([m.loss for m in models], name='loss')
@@ -50,7 +43,7 @@ def main(args):
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
     logging.info('build variables')
 
-    with tf.device(get_device_spec(device)):
+    with tf.device(devices.get_device_spec(device, _next=True)):
         grads = train.average_gradients(zip(*[m.grads for m in models]))
         optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
         with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
