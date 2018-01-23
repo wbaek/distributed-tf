@@ -21,19 +21,19 @@ def main(args):
     is_chief = args.task_index == 0
     logging.info('\nargs=%s\nconfig=%s\ndevice=%s\nis_chief=%s', args, configs, device, str(is_chief))
 
-        cluster = tf.train.ClusterSpec(configs['cluster_spec'])
+    cluster = tf.train.ClusterSpec(configs['cluster_spec'])
     server = tf.train.Server(cluster, job_name='worker', task_index=args.task_index)
-    task_device_spec = tf.DeviceSpec(job="worker", task=args.task_index).to_string()
-   
-    thread = train.build_remote_feeder_thread(args.port, params['batchsize'], queue_size=device['count']*5)
+
+    with tf.device(devices.get_device_spec(device, _next=True)):
+        thread = train.build_remote_feeder_thread(args.port, params['batchsize'], queue_size=device['count']*5, is_fake=args.fake)
     logging.info('build feeder thread')
 
     # build model graph
     models = []
     for device_index in range(device['count']):
-        with tf.device(tf.train.replica_device_setter(worker_device=task_device_spec, cluster=cluster)), \
-             tf.device(tf.DeviceSpec(device_type=device['name'], device_index=device_index)), \
-             tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+        device_spec = tf.DeviceSpec(job='worker', task=args.task_index, device_type=device['name'], device_index=device_index)
+        with tf.device(tf.train.replica_device_setter(worker_device=device_spec.to_string(), cluster=cluster)), \
+             tf.variable_scope('network', reuse=tf.AUTO_REUSE):
             xs, labels = thread.tensors()
 
             model = resnet_model.ResNet(50, params['dataset']['classes'], xs, labels, is_training=True)
@@ -41,28 +41,28 @@ def main(args):
             models.append(model)
     logging.info('build graph model')
 
-    with tf.device(tf.train.replica_device_setter(worker_device=task_device_spec, cluster=cluster)):
+    with tf.device(devices.get_device_spec(device, _next=True)):
         global_step = tf.train.get_or_create_global_step()
-
-    learning_rate = train.build_learning_rate(global_step, device['count']*num_workers, params)
-    loss = tf.reduce_mean([m.loss for m in models], name='loss')
-    accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
-    accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
+        learning_rate = train.build_learning_rate(global_step, device['count']*num_workers, params)
+        loss = tf.reduce_mean([m.loss for m in models], name='loss')
+        accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
+        accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
     logging.info('build variables')
 
-    grads = train.average_gradients(zip(*[m.grads for m in models]))
-    optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
-    if args.sync:
-        optimizer = tf.train.SyncReplicasOptimizer(optimizer,
-            replicas_to_aggregate=num_workers, total_num_replicas=num_workers)
-    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-        train_op = optimizer.apply_gradients(zip(grads, tf.trainable_variables()), global_step=global_step)
+    with tf.device(devices.get_device_spec(device, _next=True)):
+        grads = train.average_gradients(zip(*[m.grads for m in models]))
+        optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
+        if args.sync:
+            optimizer = tf.train.SyncReplicasOptimizer(optimizer,
+                replicas_to_aggregate=num_workers, total_num_replicas=num_workers)
+        with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+            train_op = optimizer.apply_gradients(zip(grads, tf.trainable_variables()), global_step=global_step)
     logging.info('build optimizer')
 
     checkpoint_saver = tf.train.CheckpointSaverHook(
         saver=tf.train.Saver(max_to_keep=100),
         checkpoint_dir=args.checkpoint_dir, save_steps=params['steps_per_epoch'])
-    chief_hooks = [checkpoint_saver]
+    chief_hooks = []#[checkpoint_saver]
     hooks = []
     logging.info('build hooks')
 
@@ -73,8 +73,7 @@ def main(args):
         'queue_size': thread.queue_size(),
     }
 
-    # train loop
-    session_config = tf.ConfigProto(
+    config = tf.ConfigProto(
         intra_op_parallelism_threads=params['num_process_per_gpu']*device['count'],
         inter_op_parallelism_threads=params['num_process_per_gpu']*device['count']*2,
         allow_soft_placement=True, log_device_placement=False
@@ -86,7 +85,7 @@ def main(args):
             save_summaries_steps=None, save_summaries_secs=None,
             hooks=hooks,
             chief_only_hooks=chief_hooks,
-            config=session_config) as sess:
+            config=config) as sess:
         thread.start(sess)
         logging.info('start feed data queue thread')
 
@@ -123,6 +122,8 @@ if __name__ == '__main__':
                         help='set gpu index (--gpus 0, 1)')
     parser.add_argument('--port',         type=int, required=True,
                         help='must be a set remote mode feeder')
+    parser.add_argument('--fake', action='store_true',
+                        help='using fake data')
 
     currnet_path = os.path.dirname(os.path.abspath(__file__))
     parser.add_argument('--checkpoint-dir', type=str, default=currnet_path+'/checkpoints/')

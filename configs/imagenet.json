@@ -1,12 +1,11 @@
 {
     "cluster_spec": {
         "ps": [
-            "worker1:2222"
+            "ps1:2222"
         ],
         "worker": [
-            "worker2:2222",
-            "worker3:2222",
-            "worker4:2222"
+            "worker1:2222",
+            "worker2:2222"
         ]
     },
     "params": {
