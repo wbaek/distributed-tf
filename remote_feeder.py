@@ -8,16 +8,16 @@ import dataflow
 from utils.imagenet import fbresnet_augmentor
 
 
-def get_datastream(dataset, mode, batchsize=0, service_code=None, processes=1, threads=1):
+def get_datastream(dataset, mode, batchsize=0, service_code=None, processes=1, threads=1, shuffle=True, remainder=False):
     # data feeder
     augmentors = fbresnet_augmentor(isTrain=(mode == 'train'))
     if dataset == 'imagenet':
         if len(service_code) < 0:
             raise ValueError('image is must be a set service-code')
-        ds = dataflow.dataset.ILSVRC12(service_code, mode, shuffle=True).parallel(num_threads=threads)
+        ds = dataflow.dataset.ILSVRC12(service_code, mode, shuffle=shuffle).parallel(num_threads=threads)
         num_classes = 1000
     elif dataset == 'mnist':
-        ds = df.dataset.Mnist(mode, shuffle=True)
+        ds = df.dataset.Mnist(mode, shuffle=shuffle)
         augmentors = [
             df.imgaug.MapImage(lambda x: x.reshape(28, 28, 1)),
             df.imgaug.ColorSpace(cv2.COLOR_GRAY2BGR),
@@ -25,7 +25,7 @@ def get_datastream(dataset, mode, batchsize=0, service_code=None, processes=1, t
         ] + augmentors
         num_classes = 10
     elif dataset == 'cifar10':
-        ds = df.dataset.Cifar10(mode, shuffle=True)
+        ds = df.dataset.Cifar10(mode, shuffle=shuffle)
         augmentors = [
             df.imgaug.Resize((256, 256))
         ] + augmentors
@@ -35,7 +35,7 @@ def get_datastream(dataset, mode, batchsize=0, service_code=None, processes=1, t
  
     ds = df.AugmentImageComponent(ds, augmentors, copy=False)
     if batchsize > 0:
-        ds = df.BatchData(ds, batchsize, remainder=False)
+        ds = df.BatchData(ds, batchsize, remainder=remainder)
     ds = df.PrefetchDataZMQ(ds, nr_proc=processes)
     return ds, num_classes
 

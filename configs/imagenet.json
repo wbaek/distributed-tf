@@ -5,7 +5,13 @@
         ],
         "worker": [
             "worker1:2222",
-            "worker2:2222"
+            "worker2:2222",
+            "worker3:2222",
+            "worker4:2222",
+            "worker5:2222",
+            "worker6:2222",
+            "worker7:2222",
+            "worker8:2222"
         ]
     },
     "params": {
@@ -20,6 +26,13 @@
             "warmup": true
         },
         "steps_per_epoch": 10009,
-        "num_process_per_gpu": 2
+        "num_process_per_gpu": 2,
+        "test": {
+            "mode": "valid",
+            "images": 50000,
+            "batchsize": 512,
+            "processes": 8,
+            "threads": 6
+        }
     }
 }

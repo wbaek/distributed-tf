@@ -7,6 +7,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def build_ds_thread(ds, batchsize, input_shape, queue_size):
+    # feed data queue input
+    _placeholders = [
+        tf.placeholder(tf.float32, (batchsize,) + input_shape),
+        tf.placeholder(tf.int64, (batchsize,))
+    ]
+    thread = dataflow.tensorflow.QueueInput(
+        ds, _placeholders, repeat_infinite=False, queue_size=queue_size)
+    return thread
+
 def build_remote_feeder_thread(port, batchsize, input_shape=(224, 224, 3), queue_size=50, is_fake=False):
     if is_fake:
         ds = df.FakeData([(batchsize,) + input_shape, (batchsize,)], 1000, random=False, dtype=['float32', 'uint8'])
@@ -16,14 +26,8 @@ def build_remote_feeder_thread(port, batchsize, input_shape=(224, 224, 3), queue
     #ds = df.PrefetchDataZMQ(ds, nr_proc=1)
     ds.reset_state()
 
-    # feed data queue input
-    _placeholders = [
-        tf.placeholder(tf.float32, (batchsize,) + input_shape),
-        tf.placeholder(tf.int64, (batchsize,))
-    ]
-    thread = dataflow.tensorflow.QueueInput(
-        ds, _placeholders, repeat_infinite=False, queue_size=queue_size)
-    return thread
+    return build_ds_thread(ds, batchsize, input_shape, queue_size)
+
 
 def build_learning_rate(global_step, device_count, params):
     return _build_learning_rate(global_step, device_count, params['steps_per_epoch'], params['batchsize'], params['learning_rate']['initial'], params['learning_rate']['warmup'])

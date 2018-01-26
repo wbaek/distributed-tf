@@ -3,111 +3,108 @@ import sys
 import time
 import logging
 
-import cv2
+import ujson as json
+import numpy as np
 import tensorflow as tf
 import tensorpack.dataflow as df
-import dataflow
-from tensorflow.python.client import device_lib
 
-from utils.imagenet import fbresnet_augmentor
+from utils import utils, devices, train
 from networks import resnet_model
 
 from remote_feeder import get_datastream
 
 def main(args):
-    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in args.gpus])
-    devices = device_lib.list_local_devices()
-    num_gpus = len([d for d in devices if 'GPU' in d.device_type])
+    with open(args.config, 'r') as f:
+        configs = json.load(f)
+    device = devices.get_devices(gpu_ids=args.gpus)
+    params = configs['params']
+    params['steps_per_epoch'] = params['test']['images'] // (params['test']['batchsize'] * device['count'])
+    logging.info('\nargs=%s\nconfig=%s\ndevice=%s', args, configs, device)
 
-    device_name = 'GPU' if num_gpus > 0 else 'CPU'
-    device_counts = max(min(num_gpus if num_gpus > 0 else 1, args.num_gpus), 1)
-    logging.info({'devices': devices, 'device_name': device_name, 'device_counts': device_counts})
-
-    args.batchsize *= device_counts
-    args.process *= device_counts
-    logging.info(args)
-
-    # feed data queue input
-    with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
-        ds = get_datastream(args.dataset, args.mode, args.batchsize, args.service_code, args.process, args.threads)
-
-        placeholders = [
-            tf.placeholder(tf.float32, (args.batchsize, 224, 224, 3)),
-            tf.placeholder(tf.int64, (args.batchsize,))
-        ]
-        ds, num_classes = get_datastream(
-            args.dataset, args.mode, args.batchsize,
-            args.service_code, args.process, args.threads)
-        thread = dataflow.tensorflow.QueueInput(
-            ds, placeholders, repeat_infinite=True, queue_size=5)
-    dp_splited = [tf.split(t, device_counts) for t in thread.tensors()]
-    logging.info('build feed data queue thread')
+    with tf.device(devices.get_device_spec(device, _next=True)):
+        ds, num_classes = get_datastream(params['dataset']['name'], params['test']['mode'],
+            params['test']['batchsize'],
+            args.service_code, params['test']['processes'], params['test']['threads'],
+            shuffle=False, remainder=True)
+        ds = df.RepeatedData(ds, 2)
+        ds.reset_state()
+        thread = train.build_ds_thread(ds, params['test']['batchsize'], (224, 224, 3), queue_size=device['count']*1)
+    logging.info('build feeder thread')
 
     # build model graph
     models = []
-    for device_idx in range(device_counts):
-        with tf.device(tf.DeviceSpec(device_type=device_name, device_index=device_idx)), \
-             tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
-            xs, labels = [dp[device_idx] for dp in dp_splited]
+    for device_index in range(device['count']):
+        device_spec = tf.DeviceSpec(device_type=device['name'], device_index=device_index)
+        with tf.device(tf.train.replica_device_setter(worker_device=device_spec.to_string(), ps_device='/cpu:0', ps_tasks=1)), \
+             tf.variable_scope('network', reuse=tf.AUTO_REUSE):
+            xs, labels = thread.tensors()
 
-            model = resnet_model.ResNet(50, num_classes, xs, labels, (args.mode == 'train'))
+            model = resnet_model.ResNet(50, params['dataset']['classes'], xs, labels, is_training=False)
             model.build_graph()
             models.append(model)
-    with tf.device(tf.DeviceSpec(device_type=device_name, device_index=0)):
+    logging.info('build graph model') 
+
+    with tf.device(devices.get_device_spec(device, _next=True)):
         loss = tf.reduce_mean([m.loss for m in models], name='loss')
         accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
-    logging.info('build graph model')
+    logging.info('build variables')
 
     # session hooks
-    steps_per_epoch = ds.size()
+    saver = tf.train.Saver()
     fetches = {
         'loss': loss,
         'accuracy': accuracy,
         'accuracy_top5': accuracy_top5,
     }
+    results = {}
 
     # train loop
     config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
-    with tf.train.SingularMonitoredSession(
-         config=config, checkpoint_dir=args.checkpoint_dir) as sess:
+    with tf.Session(config=config) as sess:
+        #sess.run(tf.global_variables_initializer())
+        saver.restore(sess, args.checkpoint)
+
         thread.start(sess)
         logging.info('start feed data queue thread')
 
-        for step in range(steps_per_epoch):
+        for step in range(params['steps_per_epoch']):
             start_time = time.time()
-            results = sess.run(fetches)
-            results.update({
+            results_batch = sess.run(fetches)
+            results_batch.update({
                 'step': step,
-                'steps_per_epoch': steps_per_epoch,
-                'batchsize': args.batchsize,
+                'steps_per_epoch': params['steps_per_epoch'],
+                'batchsize': params['test']['batchsize'],
                 'elapsed': time.time() - start_time
             })
-            results['images_per_sec'] = results['batchsize'] / results['elapsed']
+            results_batch['images_per_sec'] = results_batch['batchsize'] / results_batch['elapsed']
             logging.info(
                 'step:{step:04d}/{steps_per_epoch:04d} '
                 'loss:{loss:.4f} accuracy:{{top1:{accuracy:.4f}, top5:{accuracy_top5:.4f}}} '
                 'elapsed:{elapsed:.1f}sec '
-                '{images_per_sec:.3f}images/sec'.format_map(results))
+                '{images_per_sec:.3f}images/sec'.format_map(results_batch))
+            for key in fetches.keys():
+                if key not in results:
+                    results[key] = []
+                results[key].append( results_batch[key] )
+
+    for key in results.keys():
+        logging.info('{} = {:.5f}'.format(key, np.mean(results[key])))
 
 
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Imagenet Dataset on Kakao Example')
-    parser.add_argument('--dataset', type=str, default='imagenet',
-                        help='mnist|cifar10|imagenet')
-    parser.add_argument('--mode', type=str, default='valid',
-                        help='train or valid or test')
-    parser.add_argument('-n', '--num-gpus', type=int, default=0)
+    parser.add_argument('-c', '--config', type=str, required=True,
+                        help='config json file')
+    parser.add_argument('-s', '--checkpoint', type=str, required=True)
+    parser.add_argument('-g', '--gpus', nargs='*',
+                        help='set gpu index (--gpus 0, 1)')
 
-    parser.add_argument('--batchsize',    type=int, default=256)
-    parser.add_argument('--service-code', type=str, default='',
+    parser.add_argument('--service-code', type=str, required=True,
                         help='licence key')
-    parser.add_argument('-p', '--process', type=int, default=8)
-    parser.add_argument('-t', '--threads', type=int, default=4)
 
-    parser.add_argument('--checkpoint-dir', type=str, required=True)
     parser.add_argument('--log-filename',   type=str, default='')
     args = parser.parse_args()
 
