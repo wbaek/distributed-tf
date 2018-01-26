@@ -6,20 +6,38 @@ import logging
 
 import ujson as json
 import tensorflow as tf
+import tensorpack.dataflow as df
+import horovod.tensorflow as hvd
 
 from utils import utils, train, devices
 from networks import resnet_model
+from remote_feeder import get_datastream
 
 def main(args):
+    hvd.init()
+    #args.gpus = [_.strip() for _ in str(hvd.local_rank()).split(',')]
+    logging.info('hvd local_rank:%s rank:%d size:%d'%(str(hvd.local_rank()), hvd.rank(), hvd.size()))
+
     with open(args.config, 'r') as f:
         configs = json.load(f)
     device = devices.get_devices(gpu_ids=args.gpus)
     params = configs['params']
-    params['steps_per_epoch'] = params['dataset']['images'] // (params['batchsize'] * device['count'])
+    params['steps_per_epoch'] = params['train']['images'] // (params['train']['batchsize'] * device['count'] * hvd.size())
     logging.info('\nargs=%s\nconfig=%s\ndevice=%s', args, configs, device)
 
     with tf.device(devices.get_device_spec(device, _next=True)):
-        thread = train.build_remote_feeder_thread(args.port, params['batchsize'], queue_size=device['count']*5, is_fake=args.fake)
+        if args.local is not True or args.fake is True:
+            thread = train.build_remote_feeder_thread(args.port, params['train']['batchsize'], queue_size=device['count']*5, is_fake=args.fake)
+            logging.info('remote feeder port:%d', args.port)
+        else:
+            ds, num_classes = get_datastream(params['dataset']['name'], params['train']['mode'],
+                params['train']['batchsize'],
+                args.service_code, params['train']['processes'], params['train']['threads'],
+                shuffle=True, remainder=False)
+            ds = df.RepeatedData(ds, -1)
+            ds.reset_state()
+            thread = train.build_ds_thread(ds, params['train']['batchsize'], (224, 224, 3), queue_size=device['count']*5)
+            logging.info('local feeder')
     logging.info('build feeder thread')
 
     # build model graph
@@ -37,7 +55,7 @@ def main(args):
 
     with tf.device(devices.get_device_spec(device, _next=True)):
         global_step = tf.train.get_or_create_global_step()
-        learning_rate = train.build_learning_rate(global_step, device['count'], params)
+        learning_rate = train.build_learning_rate(global_step, device['count']*hvd.size(), params)
         loss = tf.reduce_mean([m.loss for m in models], name='loss')
         accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
@@ -46,6 +64,7 @@ def main(args):
     with tf.device(devices.get_device_spec(device, _next=True)):
         grads = train.average_gradients(zip(*[m.grads for m in models]))
         optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
+        optimizer = hvd.DistributedOptimizer(optimizer)
         with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
             train_op = optimizer.apply_gradients(zip(grads, tf.trainable_variables()), global_step=global_step)
     logging.info('build optimizer')
@@ -53,7 +72,8 @@ def main(args):
     checkpoint_saver = tf.train.CheckpointSaverHook(
         saver=tf.train.Saver(max_to_keep=100),
         checkpoint_dir=args.checkpoint_dir, save_steps=params['steps_per_epoch'])
-    hooks = [checkpoint_saver]
+    #hooks = [checkpoint_saver]
+    hooks = [hvd.BroadcastGlobalVariablesHook(0)]
     logging.info('build hooks')
 
     fetches = {
@@ -75,11 +95,17 @@ def main(args):
 
         for epoch in range(100):
             for step in range(params['steps_per_epoch']):
+                if step == 10:
+                    eval_time = time.time()
+                if step == (1000 // (device['count'] * hvd.size())) + 10:
+                    images_per_sec = 1000.0 * params['train']['batchsize'] / (time.time() - eval_time)
+                    logging.error('performance %.5f images/sec'%images_per_sec)
+
                 start_time = time.time()
                 results = utils.run_session_with_profile(sess, fetches, profile_dir='./profile/%s/'%args.name) if args.profile else sess.run(fetches)
                 results.update({
                     'epoch': results['global_step'] // params['steps_per_epoch'], 'step': results['global_step'] % params['steps_per_epoch'],
-                    'steps_per_epoch': params['steps_per_epoch'], 'batchsize': params['batchsize'], 'device_counts': device['count'],
+                    'steps_per_epoch': params['steps_per_epoch'], 'batchsize': params['train']['batchsize'], 'device_counts': device['count'],
                     'elapsed': time.time() - start_time
                 })
                 results['images_per_sec'] = (results['batchsize'] * results['device_counts']) / results['elapsed']
@@ -100,10 +126,15 @@ if __name__ == '__main__':
                         help='project name')
     parser.add_argument('-g', '--gpus', nargs='*',
                         help='set gpu index (--gpus 0, 1)')
-    parser.add_argument('--port',         type=int, required=True,
+    parser.add_argument('--port',         type=int, default=2222,
                         help='must be a set remote mode feeder')
+    parser.add_argument('--local', action='store_true',
+                        help='using local data feed')
     parser.add_argument('--fake', action='store_true',
                         help='using fake data')
+
+    parser.add_argument('--service-code', type=str, default='',
+                        help='')
 
     currnet_path = os.path.dirname(os.path.abspath(__file__))
     parser.add_argument('--checkpoint-dir', type=str, default=currnet_path+'/checkpoints/')
@@ -119,5 +150,6 @@ if __name__ == '__main__':
         logging.basicConfig(level=logging.INFO, format=log_format, stream=sys.stderr)
     else:
         logging.basicConfig(level=logging.INFO, format=log_format, filename=args.log_filename)
+    logging.getLogger("requests").setLevel(logging.WARNING)
 
     main(args)

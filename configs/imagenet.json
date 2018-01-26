@@ -17,16 +17,21 @@
     "params": {
         "dataset": {
             "name": "imagenet",
-            "classes": 1000,
-            "images": 1281167
+            "classes": 1000
         },
-        "batchsize": 128,
         "learning_rate": {
-            "initial": 0.001,
+            "initial": 0.00025,
             "warmup": true
         },
         "steps_per_epoch": 10009,
         "num_process_per_gpu": 2,
+        "train": {
+            "mode": "train",
+            "images": 1281167,
+            "batchsize": 128,
+            "processes": 8,
+            "threads": 5
+        },
         "test": {
             "mode": "valid",
             "images": 50000,

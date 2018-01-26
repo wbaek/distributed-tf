@@ -30,7 +30,7 @@ def build_remote_feeder_thread(port, batchsize, input_shape=(224, 224, 3), queue
 
 
 def build_learning_rate(global_step, device_count, params):
-    return _build_learning_rate(global_step, device_count, params['steps_per_epoch'], params['batchsize'], params['learning_rate']['initial'], params['learning_rate']['warmup'])
+    return _build_learning_rate(global_step, device_count, params['steps_per_epoch'], params['train']['batchsize'], params['learning_rate']['initial'], params['learning_rate']['warmup'])
 
 def _build_learning_rate(global_step, device_count, steps_per_epoch, batchsize, initial_learning_rate, warmup=True):
     multiplier = (batchsize * device_count) / 128.0
@@ -41,7 +41,7 @@ def _build_learning_rate(global_step, device_count, steps_per_epoch, batchsize, 
     learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32), boundaries, values)
     if warmup:
         warmup_iter = float(steps_per_epoch * 5)
-        _ratio = 1.0 / (multiplier * 4)
+        _ratio = 1.0 / multiplier
         warmup_ratio = tf.minimum(1.0, (1.0 - _ratio) * (tf.cast(global_step, tf.float32) / warmup_iter) ** 2 + _ratio)
         learning_rate *= warmup_ratio
     return learning_rate
