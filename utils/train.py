@@ -17,12 +17,8 @@ def build_ds_thread(ds, batchsize, input_shape, queue_size):
         ds, _placeholders, repeat_infinite=False, queue_size=queue_size)
     return thread
 
-def build_remote_feeder_thread(port, batchsize, input_shape=(224, 224, 3), queue_size=50, is_fake=False):
-    if is_fake:
-        ds = df.FakeData([(batchsize,) + input_shape, (batchsize,)], 1000, random=False, dtype=['float32', 'uint8'])
-        ds = df.RepeatedData(ds, -1)
-    else:
-        ds = df.RemoteDataZMQ('tcp://0.0.0.0:' + str(port))
+def build_remote_feeder_thread(port, batchsize, input_shape=(224, 224, 3), queue_size=50):
+    ds = df.RemoteDataZMQ('tcp://0.0.0.0:' + str(port))
     #ds = df.PrefetchDataZMQ(ds, nr_proc=1)
     ds.reset_state()
 

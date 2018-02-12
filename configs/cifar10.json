@@ -1,0 +1,43 @@
+{
+    "cluster_spec": {
+        "ps": [
+            "ps1:2222"
+        ],
+        "worker": [
+            "worker1:2222",
+            "worker2:2222",
+            "worker3:2222",
+            "worker4:2222",
+            "worker5:2222",
+            "worker6:2222",
+            "worker7:2222",
+            "worker8:2222"
+        ]
+    },
+    "params": {
+        "dataset": {
+            "name": "cifar10",
+            "classes": 10
+        },
+        "learning_rate": {
+            "initial": 0.00005,
+            "warmup": true
+        },
+        "steps_per_epoch": 391,
+        "num_process_per_gpu": 2,
+        "train": {
+            "mode": "train",
+            "images": 50000,
+            "batchsize": 128,
+            "processes": 8,
+            "threads": 5
+        },
+        "test": {
+            "mode": "valid",
+            "images": 10000,
+            "batchsize": 512,
+            "processes": 8,
+            "threads": 6
+        }
+    }
+}
