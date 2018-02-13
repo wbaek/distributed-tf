@@ -8,13 +8,16 @@ import dataflow
 from utils.imagenet import fbresnet_augmentor
 
 
-def get_datastream(dataset, mode, batchsize=0, service_code=None, processes=1, threads=1, shuffle=True, remainder=False):
+def get_datastream(dataset, mode, batchsize=0, service_code=None, processes=1, threads=1, shuffle=True, remainder=False, local=False):
     # data feeder
     augmentors = fbresnet_augmentor(isTrain=(mode == 'train'))
     if dataset == 'imagenet':
         if len(service_code) < 0:
-            raise ValueError('image is must be a set service-code')
-        ds = dataflow.dataset.ILSVRC12(service_code, mode, shuffle=shuffle).parallel(num_threads=threads)
+            raise ValueError('imagenet is must be a set service-code')
+        if local:
+            ds = dataflow.dataset.ILSVRC12Local(service_code, mode, shuffle=shuffle).parallel(num_threads=threads)
+        else:
+            ds = dataflow.dataset.ILSVRC12(service_code, mode, shuffle=shuffle).parallel(num_threads=threads)
         num_classes = 1000
     elif dataset == 'mnist':
         ds = df.dataset.Mnist(mode, shuffle=shuffle)

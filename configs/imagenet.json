@@ -29,8 +29,8 @@
             "mode": "train",
             "images": 1281167,
             "batchsize": 128,
-            "processes": 8,
-            "threads": 5
+            "processes": 4,
+            "threads": 6
         },
         "test": {
             "mode": "valid",

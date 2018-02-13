@@ -27,7 +27,7 @@ def main(args):
             ds, num_classes = get_datastream(params['dataset']['name'], params['train']['mode'],
                 params['train']['batchsize'],
                 args.service_code, params['train']['processes'], params['train']['threads'],
-                shuffle=True, remainder=False)
+                shuffle=True, remainder=False, local=True)
             ds = df.RepeatedData(ds, -1)
             ds.reset_state()
             thread = train.build_ds_thread(ds, params['train']['batchsize'], (224, 224, 3), queue_size=device['count']*5)
@@ -152,7 +152,7 @@ if __name__ == '__main__':
     hvd.init()
     args.nodes = {'size':hvd.size(), 'rank':hvd.rank(), 'local_rank':hvd.local_rank()} 
 
-    log_format = '[%(asctime)s %(levelname)s] [' + '%02d'%args.nodes['rank'] + '] %(message)s'
+    log_format = '[%(asctime)s %(levelname)s] [rank:' + '%02d'%args.nodes['rank'] + '] %(message)s'
     if not args.log_filename:
         logging.basicConfig(level=logging.INFO, format=log_format, stream=sys.stderr)
     else:
