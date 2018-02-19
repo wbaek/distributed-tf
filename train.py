@@ -58,7 +58,7 @@ def main(args):
 
     with tf.device(devices.get_device_spec(device, _next=True)):
         global_step = tf.train.get_or_create_global_step()
-        learning_rate = train.build_learning_rate(global_step, device['count'], params)
+        learning_rate = train.build_learning_rate(global_step, nodes['size']*device['count'], params)
         loss = tf.reduce_mean([m.loss for m in models], name='loss')
         accuracy = tf.reduce_mean([m.accuracy for m in models], name='accuracy')
         accuracy_top5 = tf.reduce_mean([m.accuracy_top5 for m in models], name='accuracy_top5')
@@ -103,7 +103,7 @@ def main(args):
         thread.start(sess)
         logging.info('start feed data queue thread')
 
-        for epoch in range(100):
+        for epoch in range(params['train']['epochs']):
             for step in range(params['steps_per_epoch']):
                 start_time = time.time()
                 results = utils.run_session_with_profile(sess, fetches, profile_dir='./profile/%s/'%args.name) if args.profile else sess.run(fetches)

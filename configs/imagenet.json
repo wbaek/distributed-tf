@@ -20,7 +20,7 @@
             "classes": 1000
         },
         "learning_rate": {
-            "initial": 0.00500,
+            "initial": 0.0005,
             "warmup": true
         },
         "steps_per_epoch": 10009,
@@ -30,7 +30,8 @@
             "images": 1281167,
             "batchsize": 128,
             "processes": 4,
-            "threads": 6
+            "threads": 6,
+            "epochs": 100
         },
         "test": {
             "mode": "valid",
