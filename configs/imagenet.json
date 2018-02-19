@@ -20,7 +20,7 @@
             "classes": 1000
         },
         "learning_rate": {
-            "initial": 0.00025,
+            "initial": 0.00500,
             "warmup": true
         },
         "steps_per_epoch": 10009,
